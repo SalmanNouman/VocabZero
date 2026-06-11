@@ -31,4 +31,4 @@ target-version = "py312"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=src/vocab_zero --cov-report=term-missing --cov-fail-under=50"
+addopts = "--cov=src/vocab_zero --cov-report=term-missing --cov-fail-under=80"
