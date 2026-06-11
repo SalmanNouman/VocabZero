@@ -22,3 +22,5 @@ uv run ruff check
 # Build the package
 uv build
 ```
+
+`DictionaryManager` creates `lexicon.json` in the current working directory on first save unless a custom path is supplied.

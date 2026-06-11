@@ -26,6 +26,8 @@ credentials.json
 chroma/
 chromadb/
 *.sqlite3
+lexicon.json
+lexicon.json.tmp
 
 # Editor / OS noise
 .idea/
