@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import chromadb
 from chromadb.utils.embedding_functions import EmbeddingFunction
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from vocab_zero.core.dictionary import LexiconEntry
 
