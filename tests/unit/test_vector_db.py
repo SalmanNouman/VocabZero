@@ -78,6 +78,9 @@ def test_add_entry_success(tmp_path, test_embedding_function, sample_entries):
     
     assert client.add_entry(sample_entries[0]) is True
     assert client.add_entry(sample_entries[1]) is True
+    
+    results = client.search("hello", k=5)
+    assert len(results) >= 1
 
 
 def test_add_entry_upsert(tmp_path, test_embedding_function, sample_entries):
@@ -188,7 +191,7 @@ def test_persistence_across_reinstantiation(tmp_path, test_embedding_function, s
     )
     
     results = client2.search("hello", k=5)
-    assert len(results) >= 1
+    assert len(results) >= 2
 
 
 def test_malformed_metadata_handling(tmp_path, test_embedding_function, sample_entries):
@@ -234,6 +237,7 @@ def test_search_order_preserved(tmp_path, test_embedding_function, sample_entrie
         client.add_entry(entry)
     
     results = client.search("hello", k=3)
+    assert len(results) >= 2, "Need at least 2 results to test ordering"
     if len(results) > 1:
         scores = [r.score for r in results]
         assert scores == sorted(scores, reverse=True)
@@ -270,9 +274,19 @@ def test_multiple_collections_isolated(tmp_path, test_embedding_function, sample
     client1.add_entry(sample_entries[0])
     client2.add_entry(sample_entries[1])
     
-    assert len(client1.search("hello", k=5)) >= 1
-    assert len(client2.search("goodbye", k=5)) >= 1
-
+    results1_hello = client1.search("hello", k=5)
+    results2_goodbye = client2.search("goodbye", k=5)
+    
+    assert len(results1_hello) == 1
+    assert len(results2_goodbye) == 1
+    assert results1_hello[0].entry.source_term == "hello"
+    assert results2_goodbye[0].entry.source_term == "goodbye"
+    
+    results1_goodbye = client1.search("goodbye", k=5)
+    results2_hello = client2.search("hello", k=5)
+    
+    assert all(r.entry.source_term != "goodbye" for r in results1_goodbye)
+    assert all(r.entry.source_term != "hello" for r in results2_hello)
 
 def test_entry_with_empty_context(tmp_path, test_embedding_function):
     client = VectorStoreClient(
