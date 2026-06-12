@@ -88,7 +88,7 @@ class VectorStoreClient:
                 search_results.append(SearchResult(entry=entry, score=score))
             
             return search_results
-        except (ValueError, TypeError, KeyError, IndexError, chromadb.errors.ChromaError):
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError, chromadb.errors.ChromaError):
             return []
 
     def delete(self, source_term: str) -> bool:
@@ -107,12 +107,9 @@ class VectorStoreClient:
 
     def clear(self) -> bool:
         try:
-            self._client.delete_collection(name=self.collection_name)
-            self._collection = self._client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"hnsw:space": "cosine"},
-                embedding_function=self._embedding_function,
-            )
+            existing = self._collection.get()
+            if existing and existing["ids"]:
+                self._collection.delete(ids=existing["ids"])
             return True
         except (ValueError, TypeError, chromadb.errors.ChromaError):
             return False
@@ -144,5 +141,5 @@ class VectorStoreClient:
                 confidence=confidence,
                 context_examples=context_examples,
             )
-        except (ValueError, TypeError, ValidationError, json.JSONDecodeError):
+        except Exception:
             return None
