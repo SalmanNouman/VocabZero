@@ -464,15 +464,14 @@ def test_context_length_capping(
     
     engine.translate("hello", context=long_context)
     
-    if mock_llm_client.translate.called:
-        call_args = mock_llm_client.translate.call_args
-        if len(call_args.args) > 1:
-            context_arg = call_args.args[1]
-            assert context_arg is not None
-            assert len(context_arg) <= 10
-        elif "context" in call_args[1]:
-            assert call_args[1]["context"] is not None
-            assert len(call_args[1]["context"]) <= 10
+    assert mock_llm_client.translate.called
+    call_args = mock_llm_client.translate.call_args
+    if len(call_args.args) > 1:
+        context_arg = call_args.args[1]
+    else:
+        context_arg = call_args[1].get("context")
+    assert context_arg is not None
+    assert len(context_arg) <= 10
 
 
 def test_no_api_key_or_secrets_in_errors(
