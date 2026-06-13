@@ -32,3 +32,6 @@ target-version = "py312"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=src/vocab_zero --cov-report=term-missing --cov-fail-under=80"
+
+[project.scripts]
+vocabzero-cli = "vocab_zero.interfaces.cli:main"
