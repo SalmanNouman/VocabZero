@@ -76,9 +76,8 @@ class TranslationEngine:
         normalized_term: str,
         context: str | None,
     ) -> TranslationResult:
-        vector_results = self._query_vector_store(source_term=normalized_term, context=context)
-        
         if self.llm_client is not None:
+            vector_results = self._query_vector_store(source_term=normalized_term, context=context)
             llm_response = self._call_llm(normalized_term, context, vector_results)
             
             if llm_response is not None:
@@ -206,9 +205,17 @@ class TranslationEngine:
         
         max_vector_similarity = max((r.score for r in vector_results), default=0.0)
         
+        total_weight = self.config.llm_confidence_weight + self.config.vector_confidence_weight
+        if total_weight > 0:
+            normalized_llm_weight = self.config.llm_confidence_weight / total_weight
+            normalized_vector_weight = self.config.vector_confidence_weight / total_weight
+        else:
+            normalized_llm_weight = 0.5
+            normalized_vector_weight = 0.5
+        
         final_confidence = (
-            (self.config.llm_confidence_weight * llm_response.confidence)
-            + (self.config.vector_confidence_weight * max_vector_similarity)
+            (normalized_llm_weight * llm_response.confidence)
+            + (normalized_vector_weight * max_vector_similarity)
         )
         
         return max(0.0, min(1.0, final_confidence))
@@ -253,6 +260,7 @@ class TranslationEngine:
         try:
             self.dictionary.save()
         except (OSError, IOError):
+            self.dictionary.delete(entry.source_term)
             return TranslationResult(
                 translated_text=entry.target_term,
                 confidence=entry.confidence,

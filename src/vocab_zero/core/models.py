@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 TranslationStatus = Literal["translated", "low_confidence", "requires_feedback", "learned", "error"]
@@ -46,6 +46,23 @@ class TranslationConfig(BaseModel):
     model_name: str = Field(default="gpt-4o-mini")
     api_key: str | None = None
     base_url: str | None = None
+
+    @model_validator(mode="after")
+    def validate_thresholds(self) -> TranslationConfig:
+        if self.high_threshold <= self.low_threshold:
+            raise ValueError(
+                f"high_threshold ({self.high_threshold}) must be strictly greater than low_threshold ({self.low_threshold})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_weights(self) -> TranslationConfig:
+        total = self.llm_confidence_weight + self.vector_confidence_weight
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(
+                f"llm_confidence_weight ({self.llm_confidence_weight}) + vector_confidence_weight ({self.vector_confidence_weight}) must equal 1.0, got {total}"
+            )
+        return self
 
     @classmethod
     def from_env(cls) -> TranslationConfig:
