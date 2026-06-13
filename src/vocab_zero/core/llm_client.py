@@ -71,11 +71,9 @@ class OpenAICompatibleClient:
                     return None
 
                 return self._parse_response(content)
-            except (OpenAIError, IndexError, AttributeError):
+            except (OpenAIError, IndexError, AttributeError, json.JSONDecodeError, ValidationError, KeyError, ValueError):
                 if attempt == effective_config.retry_count:
                     return None
-            except (json.JSONDecodeError, ValidationError, KeyError, ValueError):
-                return None
 
         return None
 
