@@ -112,6 +112,28 @@ def test_cli_interface_display_requires_feedback():
     assert any("candidate1" in line for line in outputs)
 
 
+def test_cli_interface_display_feedback_declined():
+    """Test display_translation for feedback_declined status."""
+    outputs: list[str] = []
+
+    def fake_output(text: str) -> None:
+        outputs.append(text)
+
+    engine = FakeEngine()
+    cli = CLIInterface(engine, output_func=fake_output)
+
+    result = TranslationResult(
+        translated_text="",
+        confidence=0.0,
+        source="dictionary",
+        status="feedback_declined",
+    )
+    cli.display_translation(result)
+
+    assert any("Feedback skipped" in line for line in outputs)
+    assert any("no translation provided" in line for line in outputs)
+
+
 def test_cli_interface_display_learned():
     """Test display_translation for learned status."""
     outputs: list[str] = []

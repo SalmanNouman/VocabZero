@@ -75,6 +75,9 @@ class CLIInterface(BaseInterface):
             if result.feedback_request and result.feedback_request.candidate_matches:
                 self.output_func(f"Candidates: {', '.join(result.feedback_request.candidate_matches)}")
 
+        elif result.status == "feedback_declined":
+            self.output_func("Feedback skipped - no translation provided")
+
         elif result.status == "learned":
             self.output_func(f"Learned: {result.translated_text}")
             if result.error_code:
@@ -84,6 +87,11 @@ class CLIInterface(BaseInterface):
             self.output_func(f"Error: {result.error_message or 'Unknown error'}")
             if result.error_code:
                 self.output_func(f"Error code: {result.error_code}")
+        else:
+            self.output_func(
+                f"Unhandled status: '{result.status}'."
+                f"Message: {result.error_message or result.translated_text or 'No details available.'}"
+            )
 
     def request_human_feedback(self, request: FeedbackRequest) -> LexiconEntry | None:
         """Request human feedback and return a new lexicon entry or None if rejected."""
