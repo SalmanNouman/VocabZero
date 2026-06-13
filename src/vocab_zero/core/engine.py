@@ -126,6 +126,13 @@ class TranslationEngine:
             if new_entry is not None:
                 return self._persist_learned_entry(new_entry)
 
+            return TranslationResult(
+                translated_text=entry.target_term,
+                confidence=entry.confidence,
+                source="dictionary",
+                status="feedback_declined",
+            )
+
         return TranslationResult(
             translated_text=entry.target_term,
             confidence=entry.confidence,
@@ -240,6 +247,13 @@ class TranslationEngine:
             
             if new_entry is not None:
                 return self._persist_learned_entry(new_entry)
+
+            return TranslationResult(
+                translated_text="",
+                confidence=0.0,
+                source="none",
+                status="feedback_declined",
+            )
 
         return TranslationResult(
             translated_text="",

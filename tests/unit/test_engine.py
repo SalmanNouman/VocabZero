@@ -169,12 +169,12 @@ def test_low_confidence_with_callback_persists_entry(
     config: TranslationConfig,
 ) -> None:
     temp_dictionary.upsert(LexiconEntry(source_term="hello", target_term="hola", confidence=0.3))
-    
+
     feedback_entry = LexiconEntry(source_term="hello", target_term="hi", confidence=0.95)
-    
+
     def feedback_callback(request: FeedbackRequest) -> LexiconEntry:
         return feedback_entry
-    
+
     engine = TranslationEngine(
         dictionary=temp_dictionary,
         vector_store=mock_vector_store,
@@ -182,19 +182,46 @@ def test_low_confidence_with_callback_persists_entry(
         config=config,
         on_feedback_required=feedback_callback,
     )
-    
+
     result = engine.translate("hello")
-    
+
     assert result.translated_text == "hi"
     assert result.status == "learned"
     assert result.source == "human_feedback"
-    
+
     updated_entry = temp_dictionary.lookup("hello")
     assert updated_entry is not None
     assert updated_entry.target_term == "hi"
     assert updated_entry.confidence == 0.95
-    
+
     mock_vector_store.add_entry.assert_called_once_with(feedback_entry)
+
+
+def test_low_confidence_with_callback_declined_returns_declined_status(
+    temp_dictionary: DictionaryManager,
+    mock_vector_store: Mock,
+    mock_llm_client: Mock,
+    config: TranslationConfig,
+) -> None:
+    temp_dictionary.upsert(LexiconEntry(source_term="hello", target_term="hola", confidence=0.3))
+
+    def feedback_callback(request: FeedbackRequest) -> LexiconEntry | None:
+        return None
+
+    engine = TranslationEngine(
+        dictionary=temp_dictionary,
+        vector_store=mock_vector_store,
+        llm_client=mock_llm_client,
+        config=config,
+        on_feedback_required=feedback_callback,
+    )
+
+    result = engine.translate("hello")
+
+    assert result.translated_text == "hola"
+    assert result.status == "feedback_declined"
+    assert result.source == "dictionary"
+    assert result.feedback_request is None
 
 
 def test_unknown_term_with_rag_invokes_llm(
@@ -301,12 +328,12 @@ def test_unknown_term_with_callback_persists_entry(
     config: TranslationConfig,
 ) -> None:
     mock_llm_client.translate.return_value = None
-    
+
     feedback_entry = LexiconEntry(source_term="hello", target_term="hi", confidence=0.95)
-    
+
     def feedback_callback(request: FeedbackRequest) -> LexiconEntry:
         return feedback_entry
-    
+
     engine = TranslationEngine(
         dictionary=temp_dictionary,
         vector_store=mock_vector_store,
@@ -314,17 +341,44 @@ def test_unknown_term_with_callback_persists_entry(
         config=config,
         on_feedback_required=feedback_callback,
     )
-    
+
     result = engine.translate("hello")
-    
+
     assert result.translated_text == "hi"
     assert result.status == "learned"
-    
+
     updated_entry = temp_dictionary.lookup("hello")
     assert updated_entry is not None
     assert updated_entry.target_term == "hi"
-    
+
     mock_vector_store.add_entry.assert_called_once_with(feedback_entry)
+
+
+def test_unknown_term_with_callback_declined_returns_declined_status(
+    temp_dictionary: DictionaryManager,
+    mock_vector_store: Mock,
+    mock_llm_client: Mock,
+    config: TranslationConfig,
+) -> None:
+    mock_llm_client.translate.return_value = None
+
+    def feedback_callback(request: FeedbackRequest) -> LexiconEntry | None:
+        return None
+
+    engine = TranslationEngine(
+        dictionary=temp_dictionary,
+        vector_store=mock_vector_store,
+        llm_client=mock_llm_client,
+        config=config,
+        on_feedback_required=feedback_callback,
+    )
+
+    result = engine.translate("hello")
+
+    assert result.translated_text == ""
+    assert result.status == "feedback_declined"
+    assert result.source == "none"
+    assert result.feedback_request is None
 
 
 def test_vector_upsert_failure_preserves_dictionary_learning(
