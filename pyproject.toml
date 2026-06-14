@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2,<3",
     "openai>=1,<2",
     "chromadb>=1.0,<2",
+    "pyserial>=3.5,<4",
 ]
 
 [dependency-groups]
@@ -35,3 +36,4 @@ addopts = "--cov=src/vocab_zero --cov-report=term-missing --cov-fail-under=80"
 
 [project.scripts]
 vocabzero-cli = "vocab_zero.interfaces.cli:main"
+vocabzero-serial = "vocab_zero.interfaces.serial_port:main"
