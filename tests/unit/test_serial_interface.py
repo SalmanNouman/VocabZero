@@ -323,3 +323,15 @@ def test_main_wires_args_and_runs_serial(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert config.baud_rate == 9600
     assert config.feedback_timeout == 5
     assert calls["ran"] is True
+
+
+def test_feedback_wait_aborts_immediately_on_disconnect() -> None:
+    fake_serial = FakeSerial()
+    interface = make_interface(fake_serial)
+    interface._packet_queue.put({"type": "disconnect"})
+
+    entry = interface.request_human_feedback(FeedbackRequest(source_term="source"))
+
+    assert entry is None
+    assert interface._next_packet() == {"type": "disconnect"}
+

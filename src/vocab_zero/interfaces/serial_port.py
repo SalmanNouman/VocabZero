@@ -149,6 +149,12 @@ class SerialInterface(BaseInterface):
                         self._deferred_packets.put(deferred_packet)
                     return self._feedback_entry(request, packet)
 
+                if packet["type"] == "disconnect":
+                    self._deferred_packets.put(packet)
+                    for deferred_packet in deferred_during_wait:
+                        self._deferred_packets.put(deferred_packet)
+                    return None
+
                 deferred_during_wait.append(packet)
 
             for deferred_packet in deferred_during_wait:
