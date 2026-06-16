@@ -124,7 +124,7 @@ class TranslationEngine:
             new_entry = self.on_feedback_required(feedback_request)
             
             if new_entry is not None:
-                return self._persist_learned_entry(new_entry)
+                return self.persist_learned_entry(new_entry)
 
             return TranslationResult(
                 translated_text=entry.target_term,
@@ -246,7 +246,7 @@ class TranslationEngine:
             new_entry = self.on_feedback_required(feedback_request)
             
             if new_entry is not None:
-                return self._persist_learned_entry(new_entry)
+                return self.persist_learned_entry(new_entry)
 
             return TranslationResult(
                 translated_text="",
@@ -268,7 +268,7 @@ class TranslationEngine:
             ),
         )
 
-    def _persist_learned_entry(self, entry: LexiconEntry) -> TranslationResult:
+    def persist_learned_entry(self, entry: LexiconEntry) -> TranslationResult:
         self.dictionary.upsert(entry)
         
         try:

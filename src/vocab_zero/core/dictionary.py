@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Protocol, TypeAlias
+from typing import Iterator, Protocol, TypeAlias
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -15,6 +15,7 @@ class LexiconEntry(BaseModel):
     target_term: str
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     context_examples: list[str] = Field(default_factory=list)
+    mfcc_template: list[list[float]] | None = Field(default=None)
 
 
 class Serializer(Protocol):
@@ -68,6 +69,12 @@ class DictionaryManager:
             return False
         del self._entries[source_term]
         return True
+
+    def has(self, source_term: str) -> bool:
+        return source_term in self._entries
+
+    def iter_entries(self) -> Iterator[LexiconEntry]:
+        return iter(self._entries.values())
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
