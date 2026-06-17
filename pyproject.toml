@@ -14,6 +14,8 @@ dependencies = [
     "openai>=1,<2",
     "chromadb>=1.0,<2",
     "pyserial>=3.5,<4",
+    "fastapi>=0.110.0,<0.112.0",
+    "uvicorn>=0.28.0,<0.30.0",
 ]
 
 [dependency-groups]
@@ -37,3 +39,4 @@ addopts = "--cov=src/vocab_zero --cov-report=term-missing --cov-fail-under=80"
 [project.scripts]
 vocabzero-cli = "vocab_zero.interfaces.cli:main"
 vocabzero-serial = "vocab_zero.interfaces.serial_port:main"
+vocabzero-api = "vocab_zero.interfaces.api:main"
