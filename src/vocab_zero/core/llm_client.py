@@ -31,10 +31,10 @@ class OpenAICompatibleClient:
         self.config = config
         self._client: OpenAIClient | None = None
 
-        if config.api_key:
+        if config.api_key or config.base_url:
             try:
                 self._client = OpenAI(
-                    api_key=config.api_key,
+                    api_key=config.api_key or "placeholder-key",
                     base_url=config.base_url,
                     timeout=config.timeout_seconds,
                 )
@@ -110,7 +110,16 @@ class OpenAICompatibleClient:
 
     def _parse_response(self, content: str) -> LLMResponse | None:
         try:
-            data = json.loads(content)
+            cleaned = content.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r"^```(?:json)?\n", "", cleaned)
+                cleaned = re.sub(r"\n```$", "", cleaned).strip()
+            json_start = cleaned.find("{")
+            json_end = cleaned.rfind("}")
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                cleaned = cleaned[json_start:json_end + 1]
+
+            data = json.loads(cleaned)
             response = LLMResponse.model_validate(data)
 
             if not 0.0 <= response.confidence <= 1.0:
@@ -159,15 +168,17 @@ class GemmaClient:
         if self._pipeline is not None:
             return True
         try:
+            import importlib.util
             import torch
             from transformers import pipeline  # type: ignore[import-untyped]
 
+            use_4bit = torch.cude.is_available() and importlib.util.find_spec("bitsandbytes") is not None
             self._pipeline = pipeline(
                 "text-generation",
                 model=self.model_name,
                 device_map="auto",
                 torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-                model_kwargs={"load_in_4bit": True} if torch.cuda.is_available() else None,
+                model_kwargs={"load_in_4bit": True} if use_4bit else None,
             )
             return True
         except Exception:

@@ -144,7 +144,7 @@ def build_engine(
 
     if provider == "gemma":
         llm_client = GemmaClient(config=config)
-    elif config.api_key:
+    elif config.api_key or config.base_url:
         llm_client = OpenAICompatibleClient(config)
 
     return TranslationEngine(
