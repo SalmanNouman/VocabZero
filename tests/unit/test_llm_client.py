@@ -403,6 +403,6 @@ def test_gemma_lazy_pipeline_loads_on_first_call(gemma_client: GemmaClient) -> N
     def _fake_load() -> bool:
         gemma_client._pipeline = mock_pipe
         return True
-    with patch.object(gemma_client, '_load_pipeline', side_effect=_fake_load) as mock_load:
+    with patch.object(gemma_client, '_load_pipeline', side_effect=_fake_load):
         result = gemma_client.translate("test")
     assert result is not None
