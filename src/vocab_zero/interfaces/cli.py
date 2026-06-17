@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Callable
 
 from vocab_zero.core.dictionary import DictionaryManager, LexiconEntry
 from vocab_zero.core.engine import TranslationEngine
-from vocab_zero.core.llm_client import NLLBClient, OpenAICompatibleClient
+from vocab_zero.core.llm_client import GemmaClient, OpenAICompatibleClient
 from vocab_zero.core.models import FeedbackRequest, TranslationConfig, TranslationResult
 from vocab_zero.core.vector_db import VectorStoreClient
 from vocab_zero.interfaces.base import BaseInterface
@@ -126,12 +126,10 @@ def build_engine(
 
     Respects the following environment variables:
 
-    - ``LLM_PROVIDER``: ``"nllb"`` to use the local NLLB-200 model, or ``"openai"``
-      (default) to use any OpenAI-compatible endpoint.
-    - ``NLLB_SRC_LANG``: FLORES-200 source language code (default ``"rhg_Latn"``).
-    - ``NLLB_TGT_LANG``: FLORES-200 target language code (default ``"eng_Latn"``).
+    - ``LLM_PROVIDER``: ``"gemma"`` to use the local Gemma model or OpenAI-compatible
+      endpoint, or ``"openai"`` (default) to use any OpenAI-compatible endpoint.
     - ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` / ``LLM_MODEL_NAME``: used when
-      provider is ``"openai"``.
+      provider is ``"openai"`` or ``"gemma"`` with an OpenAI-compatible endpoint.
     """
     dictionary = DictionaryManager(path=dictionary_path)
 
@@ -141,13 +139,11 @@ def build_engine(
 
     config = TranslationConfig.from_env()
 
-    llm_client: NLLBClient | OpenAICompatibleClient | None = None
+    llm_client: GemmaClient | OpenAICompatibleClient | None = None
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
 
-    if provider == "nllb":
-        src_lang = os.getenv("NLLB_SRC_LANG", "rhg_Latn")
-        tgt_lang = os.getenv("NLLB_TGT_LANG", "eng_Latn")
-        llm_client = NLLBClient(src_lang=src_lang, tgt_lang=tgt_lang)
+    if provider == "gemma":
+        llm_client = GemmaClient(config=config)
     elif config.api_key:
         llm_client = OpenAICompatibleClient(config)
 
