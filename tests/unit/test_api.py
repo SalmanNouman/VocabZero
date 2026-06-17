@@ -18,6 +18,8 @@ class MockEngine:
         self.dictionary._entries = {}
         self.dictionary.iter_entries = lambda: iter(self.dictionary._entries.values())
         self.dictionary.has = lambda x: x in self.dictionary._entries
+        self.dictionary.lookup = lambda x: self.dictionary._entries.get(x)
+        self.dictionary.delete.side_effect = lambda x: x in self.dictionary._entries and (self.dictionary._entries.pop(x, None) is not None)
         self.translate = MagicMock()
         self.persist_learned_entry = MagicMock()
 
