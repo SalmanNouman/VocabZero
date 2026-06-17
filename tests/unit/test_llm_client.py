@@ -6,7 +6,7 @@ import pytest
 from openai import OpenAIError
 
 from vocab_zero.core.models import TranslationConfig
-from vocab_zero.core.llm_client import OpenAICompatibleClient
+from vocab_zero.core.llm_client import OpenAICompatibleClient, GemmaClient
 
 
 @pytest.fixture
@@ -244,118 +244,165 @@ def test_missing_message_attribute_returns_none(client: OpenAICompatibleClient) 
 
 
 # ---------------------------------------------------------------------------
-# NLLBClient tests
+# GemmaClient tests
 # ---------------------------------------------------------------------------
-
-from vocab_zero.core.llm_client import NLLBClient  # noqa: E402
 
 
 @pytest.fixture
-def nllb_client() -> NLLBClient:
-    return NLLBClient(src_lang="rhg_Latn", tgt_lang="eng_Latn")
+def gemma_config() -> TranslationConfig:
+    return TranslationConfig(
+        api_key=None,
+        base_url=None,
+        model_name="google/gemma-2b-it",
+    )
 
 
-def _make_mock_pipeline(translation: str = "water") -> Mock:
-    """Return a callable mock that mimics the transformers pipeline output."""
+@pytest.fixture
+def gemma_client(gemma_config: TranslationConfig) -> GemmaClient:
+    return GemmaClient(config=gemma_config)
+
+
+def _make_mock_gemma_pipeline(response_json: str) -> Mock:
+    """Return a callable mock that mimics the transformers text-generation pipeline output."""
     mock_pipe = Mock()
-    mock_pipe.return_value = [{"translation_text": translation}]
+    mock_pipe.return_value = [{"generated_text": response_json}]
     return mock_pipe
 
 
-def test_nllb_translate_success(nllb_client: NLLBClient) -> None:
-    nllb_client._pipeline = _make_mock_pipeline("water")
-    result = nllb_client.translate("maay")
+def test_gemma_default_model() -> None:
+    client = GemmaClient()
+    assert client.model_name == "google/gemma-2b-it"
+
+
+def test_gemma_custom_model() -> None:
+    client = GemmaClient(model_name="my-custom-model")
+    assert client.model_name == "my-custom-model"
+
+
+def test_gemma_openai_compatible_init() -> None:
+    config = TranslationConfig(base_url="http://localhost:11434/v1", api_key="some-key")
+    client = GemmaClient(config=config)
+    assert client._openai_client is not None
+    assert client.model_name == "google/gemma-2b-it"  # Fallback from default gpt-4o-mini
+
+    # Verify custom model in configuration is respected
+    config_custom = TranslationConfig(
+        base_url="http://localhost:11434/v1",
+        api_key="some-key",
+        model_name="gemma-2-9b-it"
+    )
+    client_custom = GemmaClient(config=config_custom)
+    assert client_custom.model_name == "gemma-2-9b-it"
+
+
+def test_gemma_translate_success_hf(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline(
+        '{"translation": "water", "reasoning": "context matches", "confidence": 0.9}'
+    )
+    result = gemma_client.translate("maay")
     assert result is not None
     assert result.translation == "water"
-    assert 0.0 <= result.confidence <= 1.0
-    assert result.reasoning != ""
+    assert result.reasoning == "context matches"
+    assert result.confidence == 0.9
 
 
-def test_nllb_translate_empty_term_returns_none(nllb_client: NLLBClient) -> None:
-    nllb_client._pipeline = _make_mock_pipeline()
-    result = nllb_client.translate("   ")
-    assert result is None
+def test_gemma_translate_success_openai() -> None:
+    config = TranslationConfig(base_url="http://localhost:11434/v1", api_key="some-key")
+    client = GemmaClient(config=config)
+    
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = (
+        '{"translation": "hello", "reasoning": "openai compat", "confidence": 0.85}'
+    )
+    
+    with patch.object(client._openai_client, "chat") as mock_chat:
+        mock_chat.completions.create.return_value = mock_response
+        result = client.translate("hello")
+        
+        assert result is not None
+        assert result.translation == "hello"
+        assert result.reasoning == "openai compat"
+        assert result.confidence == 0.85
 
 
-def test_nllb_translate_pipeline_load_failure_returns_none(nllb_client: NLLBClient) -> None:
-    # Force _load_pipeline to fail by making the import raise
-    with patch("vocab_zero.core.llm_client.NLLBClient._load_pipeline", return_value=False):
-        result = nllb_client.translate("maay")
-    assert result is None
+def test_gemma_translate_masked_sentence_completion_openai() -> None:
+    config = TranslationConfig(base_url="http://localhost:11434/v1", api_key="some-key")
+    client = GemmaClient(config=config)
+    
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = (
+        '{"translation": "four, plastic, three", "reasoning": "masked fill", "confidence": 0.95}'
+    )
+    
+    with patch.object(client._openai_client, "chat") as mock_chat:
+        mock_chat.completions.create.return_value = mock_response
+        result = client.translate("I bought [unknown] bags")
+        
+        assert result is not None
+        assert result.translation == "four, plastic, three"
+        assert result.reasoning == "masked fill"
+        assert result.confidence == 0.95
+        
+        # Verify the prompt contained instructions for masked completion
+        args = mock_chat.completions.create.call_args[1]
+        messages = args["messages"]
+        system_msg = next(m["content"] for m in messages if m["role"] == "system")
+        assert "masked/unknown word" in system_msg
+        assert "comma-separated list" in system_msg
 
 
-def test_nllb_translate_pipeline_raises_returns_none(nllb_client: NLLBClient) -> None:
-    mock_pipe = Mock(side_effect=RuntimeError("GPU OOM"))
-    nllb_client._pipeline = mock_pipe
-    result = nllb_client.translate("maay")
-    assert result is None
-
-
-def test_nllb_translate_empty_result_list_returns_none(nllb_client: NLLBClient) -> None:
-    mock_pipe = Mock(return_value=[])
-    nllb_client._pipeline = mock_pipe
-    result = nllb_client.translate("maay")
-    assert result is None
-
-
-def test_nllb_translate_empty_translation_text_returns_none(nllb_client: NLLBClient) -> None:
-    mock_pipe = Mock(return_value=[{"translation_text": "   "}])
-    nllb_client._pipeline = mock_pipe
-    result = nllb_client.translate("maay")
-    assert result is None
-
-
-def test_nllb_translate_non_list_result_returns_none(nllb_client: NLLBClient) -> None:
-    mock_pipe = Mock(return_value=None)
-    nllb_client._pipeline = mock_pipe
-    result = nllb_client.translate("maay")
-    assert result is None
-
-
-def test_nllb_translate_context_prepended(nllb_client: NLLBClient) -> None:
-    """Verify that context is prepended to the source term before calling the pipeline."""
-    mock_pipe = _make_mock_pipeline("food")
-    nllb_client._pipeline = mock_pipe
-    nllb_client.translate("khana", context="meal")
-    call_text = mock_pipe.call_args[0][0]
-    assert "meal" in call_text
-    assert "khana" in call_text
-
-
-def test_nllb_frequency_fingerprint_returns_none(nllb_client: NLLBClient) -> None:
-    """Frequency keys must never be passed to NLLB — it cannot translate them."""
-    nllb_client._pipeline = _make_mock_pipeline("water")
-    for freq_key in ("440", "220_440", "100_200_400", "440_880_1760"):
-        result = nllb_client.translate(freq_key)
-        assert result is None, f"Expected None for frequency key {freq_key!r}"
-    # Pipeline should not have been called at all
-    nllb_client._pipeline.assert_not_called()
-
-
-def test_nllb_real_text_not_rejected(nllb_client: NLLBClient) -> None:
-    """Regular Rohingya text like 'maay' must still be passed to NLLB."""
-    nllb_client._pipeline = _make_mock_pipeline("water")
-    result = nllb_client.translate("maay")
+def test_gemma_translate_masked_sentence_completion_hf(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline(
+        '{"translation": "four, plastic, three", "reasoning": "masked fill", "confidence": 0.95}'
+    )
+    result = gemma_client.translate("I bought [mask] bags")
     assert result is not None
-    nllb_client._pipeline.assert_called_once()
+    assert result.translation == "four, plastic, three"
+    assert result.reasoning == "masked fill"
+    assert result.confidence == 0.95
 
 
-def test_nllb_default_lang_codes() -> None:
-    client = NLLBClient()
-    assert client.src_lang == "rhg_Latn"
-    assert client.tgt_lang == "eng_Latn"
+def test_gemma_translate_empty_term_returns_none(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline("{}")
+    result = gemma_client.translate("   ")
+    assert result is None
 
 
-def test_nllb_lazy_pipeline_loads_on_first_call(nllb_client: NLLBClient) -> None:
-    """Pipeline should be None at construction time and initialised lazily."""
-    assert nllb_client._pipeline is None
+def test_gemma_translate_pipeline_load_failure_returns_none(gemma_client: GemmaClient) -> None:
+    with patch("vocab_zero.core.llm_client.GemmaClient._load_pipeline", return_value=False):
+        result = gemma_client.translate("maay")
+    assert result is None
 
-    mock_pipe = _make_mock_pipeline("hello")
+
+def test_gemma_translate_pipeline_raises_returns_none(gemma_client: GemmaClient) -> None:
+    mock_pipe = Mock(side_effect=RuntimeError("GPU OOM"))
+    gemma_client._pipeline = mock_pipe
+    result = gemma_client.translate("maay")
+    assert result is None
+
+
+def test_gemma_translate_invalid_json_returns_none(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline("not json")
+    result = gemma_client.translate("maay")
+    assert result is None
+
+
+def test_gemma_frequency_fingerprint_returns_none(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline('{"translation": "water", "reasoning": "test", "confidence": 0.8}')
+    for freq_key in ("440", "220_440", "100_200_400"):
+        result = gemma_client.translate(freq_key)
+        assert result is None
+    gemma_client._pipeline.assert_not_called()
+
+
+def test_gemma_lazy_pipeline_loads_on_first_call(gemma_client: GemmaClient) -> None:
+    assert gemma_client._pipeline is None
+    mock_pipe = _make_mock_gemma_pipeline('{"translation": "hello", "reasoning": "test", "confidence": 0.8}')
     with patch("vocab_zero.core.llm_client.pipeline", mock_pipe, create=True):
-        # Patch the import inside _load_pipeline
         with patch.dict("sys.modules", {"transformers": Mock(pipeline=mock_pipe)}):
-            nllb_client._pipeline = mock_pipe  # Simulate successful lazy load
-            result = nllb_client.translate("test")
-
+            gemma_client._pipeline = mock_pipe
+            result = gemma_client.translate("test")
     assert result is not None
 
