@@ -69,4 +69,5 @@ class TranslationConfig(BaseModel):
         return cls(
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL"),
+            model_name=os.getenv("LLM_MODEL_NAME", "gpt-4o-mini"),
         )

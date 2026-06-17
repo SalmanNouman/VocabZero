@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import TYPE_CHECKING, Callable
 
 from vocab_zero.core.dictionary import DictionaryManager, LexiconEntry
 from vocab_zero.core.engine import TranslationEngine
-from vocab_zero.core.llm_client import OpenAICompatibleClient
+from vocab_zero.core.llm_client import NLLBClient, OpenAICompatibleClient
 from vocab_zero.core.models import FeedbackRequest, TranslationConfig, TranslationResult
 from vocab_zero.core.vector_db import VectorStoreClient
 from vocab_zero.interfaces.base import BaseInterface
@@ -121,7 +122,17 @@ def build_engine(
     dictionary_path: str = "lexicon.json",
     vector_db_path: str | None = None,
 ) -> TranslationEngine:
-    """Factory function to build a TranslationEngine with configured components."""
+    """Factory function to build a TranslationEngine with configured components.
+
+    Respects the following environment variables:
+
+    - ``LLM_PROVIDER``: ``"nllb"`` to use the local NLLB-200 model, or ``"openai"``
+      (default) to use any OpenAI-compatible endpoint.
+    - ``NLLB_SRC_LANG``: FLORES-200 source language code (default ``"rhg_Latn"``).
+    - ``NLLB_TGT_LANG``: FLORES-200 target language code (default ``"eng_Latn"``).
+    - ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` / ``LLM_MODEL_NAME``: used when
+      provider is ``"openai"``.
+    """
     dictionary = DictionaryManager(path=dictionary_path)
 
     vector_store: VectorStoreClient | None = None
@@ -130,8 +141,14 @@ def build_engine(
 
     config = TranslationConfig.from_env()
 
-    llm_client: OpenAICompatibleClient | None = None
-    if config.api_key:
+    llm_client: NLLBClient | OpenAICompatibleClient | None = None
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+
+    if provider == "nllb":
+        src_lang = os.getenv("NLLB_SRC_LANG", "rhg_Latn")
+        tgt_lang = os.getenv("NLLB_TGT_LANG", "eng_Latn")
+        llm_client = NLLBClient(src_lang=src_lang, tgt_lang=tgt_lang)
+    elif config.api_key:
         llm_client = OpenAICompatibleClient(config)
 
     return TranslationEngine(
