@@ -5,7 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-
 TranslationStatus = Literal["translated", "low_confidence", "requires_feedback", "feedback_declined", "learned", "error"]
 TranslationSource = Literal["dictionary", "llm_inference", "human_feedback", "none"]
 
@@ -69,4 +68,5 @@ class TranslationConfig(BaseModel):
         return cls(
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL"),
+            model_name=os.getenv("LLM_MODEL_NAME", "gpt-4o-mini"),
         )

@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 import pytest
 from openai import OpenAIError
 
+from vocab_zero.core.llm_client import GemmaClient, OpenAICompatibleClient
 from vocab_zero.core.models import TranslationConfig
-from vocab_zero.core.llm_client import OpenAICompatibleClient
 
 
 @pytest.fixture
@@ -229,6 +229,7 @@ def test_missing_message_content_returns_none(client: OpenAICompatibleClient) ->
         assert result is None
 
 
+
 def test_missing_message_attribute_returns_none(client: OpenAICompatibleClient) -> None:
     mock_response = Mock()
     mock_response.choices = [Mock()]
@@ -236,7 +237,172 @@ def test_missing_message_attribute_returns_none(client: OpenAICompatibleClient) 
 
     with patch.object(client._client, "chat") as mock_chat:
         mock_chat.completions.create.return_value = mock_response
-        
+
+        result = client.translate("hello")
+
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# GemmaClient tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gemma_config() -> TranslationConfig:
+    return TranslationConfig(
+        api_key=None,
+        base_url=None,
+        model_name="google/gemma-2b-it",
+    )
+
+
+@pytest.fixture
+def gemma_client(gemma_config: TranslationConfig) -> GemmaClient:
+    return GemmaClient(config=gemma_config)
+
+
+def _make_mock_gemma_pipeline(response_json: str) -> Mock:
+    """Return a callable mock that mimics the transformers text-generation pipeline output."""
+    mock_pipe = Mock()
+    mock_pipe.return_value = [{"generated_text": response_json}]
+    return mock_pipe
+
+
+def test_gemma_default_model() -> None:
+    client = GemmaClient()
+    assert client.model_name == "google/gemma-2b-it"
+
+
+def test_gemma_custom_model() -> None:
+    client = GemmaClient(model_name="my-custom-model")
+    assert client.model_name == "my-custom-model"
+
+
+def test_gemma_openai_compatible_init() -> None:
+    config = TranslationConfig(base_url="http://localhost:11434/v1", api_key="some-key")
+    client = GemmaClient(config=config)
+    assert client._openai_client is not None
+    assert client.model_name == "google/gemma-2b-it"  # Fallback from default gpt-4o-mini
+
+    # Verify custom model in configuration is respected
+    config_custom = TranslationConfig(
+        base_url="http://localhost:11434/v1",
+        api_key="some-key",
+        model_name="gemma-2-9b-it"
+    )
+    client_custom = GemmaClient(config=config_custom)
+    assert client_custom.model_name == "gemma-2-9b-it"
+
+
+def test_gemma_translate_success_hf(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline(
+        '{"translation": "water", "reasoning": "context matches", "confidence": 0.9}'
+    )
+    result = gemma_client.translate("maay")
+    assert result is not None
+    assert result.translation == "water"
+    assert result.reasoning == "context matches"
+    assert result.confidence == 0.9
+
+
+def test_gemma_translate_success_openai() -> None:
+    config = TranslationConfig(base_url="http://localhost:11434/v1", api_key="some-key")
+    client = GemmaClient(config=config)
+    
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = (
+        '{"translation": "hello", "reasoning": "openai compat", "confidence": 0.85}'
+    )
+    
+    with patch.object(client._openai_client, "chat") as mock_chat:
+        mock_chat.completions.create.return_value = mock_response
         result = client.translate("hello")
         
+        assert result is not None
+        assert result.translation == "hello"
+        assert result.reasoning == "openai compat"
+        assert result.confidence == 0.85
+
+
+def test_gemma_translate_masked_sentence_completion_openai() -> None:
+    config = TranslationConfig(base_url="http://localhost:11434/v1", api_key="some-key")
+    client = GemmaClient(config=config)
+    
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = (
+        '{"translation": "four, plastic, three", "reasoning": "masked fill", "confidence": 0.95}'
+    )
+    
+    with patch.object(client._openai_client, "chat") as mock_chat:
+        mock_chat.completions.create.return_value = mock_response
+        result = client.translate("I bought [unknown] bags")
+        
+        assert result is not None
+        assert result.translation == "four, plastic, three"
+        assert result.reasoning == "masked fill"
+        assert result.confidence == 0.95
+        
+        # Verify the prompt contained instructions for masked completion
+        args = mock_chat.completions.create.call_args[1]
+        messages = args["messages"]
+        system_msg = next(m["content"] for m in messages if m["role"] == "system")
+        assert "masked/unknown word" in system_msg
+        assert "comma-separated list" in system_msg
+
+
+def test_gemma_translate_masked_sentence_completion_hf(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline(
+        '{"translation": "four, plastic, three", "reasoning": "masked fill", "confidence": 0.95}'
+    )
+    result = gemma_client.translate("I bought [mask] bags")
+    assert result is not None
+    assert result.translation == "four, plastic, three"
+    assert result.reasoning == "masked fill"
+    assert result.confidence == 0.95
+
+
+def test_gemma_translate_empty_term_returns_none(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline("{}")
+    result = gemma_client.translate("   ")
+    assert result is None
+
+
+def test_gemma_translate_pipeline_load_failure_returns_none(gemma_client: GemmaClient) -> None:
+    with patch("vocab_zero.core.llm_client.GemmaClient._load_pipeline", return_value=False):
+        result = gemma_client.translate("maay")
+    assert result is None
+
+
+def test_gemma_translate_pipeline_raises_returns_none(gemma_client: GemmaClient) -> None:
+    mock_pipe = Mock(side_effect=RuntimeError("GPU OOM"))
+    gemma_client._pipeline = mock_pipe
+    result = gemma_client.translate("maay")
+    assert result is None
+
+
+def test_gemma_translate_invalid_json_returns_none(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline("not json")
+    result = gemma_client.translate("maay")
+    assert result is None
+
+
+def test_gemma_frequency_fingerprint_returns_none(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline('{"translation": "water", "reasoning": "test", "confidence": 0.8}')
+    for freq_key in ("440", "220_440", "100_200_400"):
+        result = gemma_client.translate(freq_key)
         assert result is None
+    gemma_client._pipeline.assert_not_called()
+
+
+def test_gemma_lazy_pipeline_loads_on_first_call(gemma_client: GemmaClient) -> None:
+    assert gemma_client._pipeline is None
+    mock_pipe = _make_mock_gemma_pipeline('{"translation": "hello", "reasoning": "test", "confidence": 0.8}')
+    def _fake_load() -> bool:
+        gemma_client._pipeline = mock_pipe
+        return True
+    with patch.object(gemma_client, '_load_pipeline', side_effect=_fake_load):
+        result = gemma_client.translate("test")
+    assert result is not None

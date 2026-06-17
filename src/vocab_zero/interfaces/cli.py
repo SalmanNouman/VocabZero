@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import TYPE_CHECKING, Callable
 
 from vocab_zero.core.dictionary import DictionaryManager, LexiconEntry
 from vocab_zero.core.engine import TranslationEngine
-from vocab_zero.core.llm_client import OpenAICompatibleClient
+from vocab_zero.core.llm_client import GemmaClient, OpenAICompatibleClient
 from vocab_zero.core.models import FeedbackRequest, TranslationConfig, TranslationResult
 from vocab_zero.core.vector_db import VectorStoreClient
 from vocab_zero.interfaces.base import BaseInterface
@@ -121,7 +122,15 @@ def build_engine(
     dictionary_path: str = "lexicon.json",
     vector_db_path: str | None = None,
 ) -> TranslationEngine:
-    """Factory function to build a TranslationEngine with configured components."""
+    """Factory function to build a TranslationEngine with configured components.
+
+    Respects the following environment variables:
+
+    - ``LLM_PROVIDER``: ``"gemma"`` to use the local Gemma model or OpenAI-compatible
+      endpoint, or ``"openai"`` (default) to use any OpenAI-compatible endpoint.
+    - ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` / ``LLM_MODEL_NAME``: used when
+      provider is ``"openai"`` or ``"gemma"`` with an OpenAI-compatible endpoint.
+    """
     dictionary = DictionaryManager(path=dictionary_path)
 
     vector_store: VectorStoreClient | None = None
@@ -130,8 +139,12 @@ def build_engine(
 
     config = TranslationConfig.from_env()
 
-    llm_client: OpenAICompatibleClient | None = None
-    if config.api_key:
+    llm_client: GemmaClient | OpenAICompatibleClient | None = None
+    provider = os.getenv("LLM_PROVIDER", "openai").lower()
+
+    if provider == "gemma":
+        llm_client = GemmaClient(config=config)
+    elif config.api_key or config.base_url:
         llm_client = OpenAICompatibleClient(config)
 
     return TranslationEngine(
