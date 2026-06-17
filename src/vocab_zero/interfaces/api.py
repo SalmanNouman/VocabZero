@@ -84,8 +84,12 @@ def perform_audio_matching(
     min_dist = float("inf")
 
     for entry in dictionary.iter_entries():
-        if entry.mfcc_template is not None:
-            dist = dtw_distance(query_mfcc, entry.mfcc_template)
+        template = entry.mfcc_template
+        if template:
+            if any(len(frame) != expected_dims for frame in template):
+                logger.warning("Skipping invalid mfcc_template for '%s'", entry.source_term)
+                continue
+            dist = dtw_distance(query_mfcc, template)
             if dist < min_dist:
                 min_dist = dist
                 best_match = entry
@@ -134,9 +138,14 @@ def process_feedback(
             len(mfcc_template),
         )
 
+    stripped_source = source_term.strip()
+    stripped_target = target_term.strip()
+    if not stripped_source or not stripped_target:
+        raise ValueError("source_term and target_term must be non-empty after stripping whitespace")
+
     entry = LexiconEntry(
-        source_term=source_term.strip(),
-        target_term=target_term.strip(),
+        source_term=stripped_source,
+        target_term=stripped_target,
         confidence=1.0,
         context_examples=[context] if context else [],
         mfcc_template=mfcc_template,
@@ -296,11 +305,20 @@ async def get_lexicon(request: Request):
 async def delete_lexicon_entry(request: Request, source_term: str):
     engine = request.app.state.engine
     normalized = source_term.strip()
-    if engine.dictionary.has(normalized):
-        engine.dictionary.delete(normalized)
+    existing = engine.dictionary.lookup(normalized)
+    if existing is None:
+        return api_error("not_found", f"Entry '{source_term}' not found in lexicon")
+
+    if not engine.dictionary.delete(normalized):
+        return api_error("not_found", f"Entry '{source_term}' not found in lexicon")
+
+    try:
         engine.dictionary.save()
-        return api_success({"deleted": True})
-    return api_error("not_found", f"Entry '{source_term}' not found in lexicon")
+    except (OSError, IOError):
+        engine.dictionary.upsert(existing)
+        return api_error("persistence_failed", "Failed to persist lexicon deletion")
+
+    return api_success({"deleted": True})
 
 
 @app.websocket("/stream")
