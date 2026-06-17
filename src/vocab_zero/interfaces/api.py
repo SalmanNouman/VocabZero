@@ -23,6 +23,7 @@ STATIC_DIR = Path(__file__).parent / "static"
 INDEX_HTML = STATIC_DIR / "index.html"
 
 DTW_MATCH_THRESHOLD = 15.0
+MAX_AUDIO_SIZE = 160000  # Maximum samples (~10 seconds at 16kHz)
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,13 @@ class AudioMatchResult(NamedTuple):
 def perform_audio_matching(
     audio_data: list[float], dictionary: DictionaryManager
 ) -> AudioMatchResult:
+    if len(audio_data) > MAX_AUDIO_SIZE:
+        logger.warning("Audio payload exceeds maximum size: %d samples", len(audio_data))
+        return AudioMatchResult(None, float("inf"))
     query_mfcc = extract_mfcc(audio_data, sample_rate=16000)
+    if not query_mfcc:
+        return AudioMatchResult(None, float("inf"))
+    expected_dims = len(query_mfcc[0])
 
     best_match = None
     min_dist = float("inf")
@@ -118,6 +125,9 @@ def process_feedback(
 ) -> tuple[LexiconEntry, TranslationResult]:
     mfcc_template = None
     if audio_data is not None and len(audio_data) > 0:
+        if len(audio_data) > MAX_AUDIO_SIZE:
+            logger.warning("Audio payload exceeds maximum size in feedback: %d samples", len(audio_data))
+            raise ValueError(f"Audio payload exceeds maximum size of {MAX_AUDIO_SIZE} samples")
         mfcc_template = extract_mfcc(audio_data, sample_rate=16000)
         logger.debug(
             "Generated MFCC template for feedback (shape %dx13)",
@@ -244,13 +254,18 @@ async def feedback(request: Request, payload: FeedbackRequestData):
     engine = request.app.state.engine
     logger.info("Taught mapping: %s -> %s", payload.source_term, payload.target_term)
 
-    _, result = process_feedback(
-        payload.source_term,
-        payload.target_term,
-        payload.audio_data,
-        payload.context,
-        engine,
-    )
+    try:
+        _, result = process_feedback(
+            payload.source_term,
+            payload.target_term,
+            payload.audio_data,
+            payload.context,
+            engine,
+        )
+    except ValueError as e:
+        if "audio" in str(e).lower():
+            return api_error("audio_too_large", str(e))
+        return api_error("invalid_input", str(e))
 
     if result.status == "error":
         return api_error(
@@ -365,13 +380,24 @@ async def stream(websocket: WebSocket):
 
                 logger.info("WebSocket feedback: %s -> %s", msg.source_term, msg.target_term)
 
-                _, result = process_feedback(
-                    msg.source_term,
-                    msg.target_term,
-                    msg.audio_data,
-                    msg.context,
-                    engine,
-                )
+                try:
+                    _, result = process_feedback(
+                        msg.source_term,
+                        msg.target_term,
+                        msg.audio_data,
+                        msg.context,
+                        engine,
+                    )
+                except ValueError as e:
+                    error_code = "audio_too_large" if "audio" in str(e).lower() else "invalid_input"
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "code": error_code,
+                            "message": str(e),
+                        }
+                    )
+                    continue
 
                 if result.status == "error":
                     await websocket.send_json(
