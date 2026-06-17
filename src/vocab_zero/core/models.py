@@ -5,7 +5,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-
 TranslationStatus = Literal["translated", "low_confidence", "requires_feedback", "feedback_declined", "learned", "error"]
 TranslationSource = Literal["dictionary", "llm_inference", "human_feedback", "none"]
 

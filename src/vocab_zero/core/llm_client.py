@@ -159,8 +159,8 @@ class GemmaClient:
         if self._pipeline is not None:
             return True
         try:
-            from transformers import pipeline  # type: ignore[import-untyped]
             import torch
+            from transformers import pipeline  # type: ignore[import-untyped]
 
             self._pipeline = pipeline(
                 "text-generation",

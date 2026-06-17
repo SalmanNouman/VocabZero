@@ -5,8 +5,8 @@ from unittest.mock import Mock, patch
 import pytest
 from openai import OpenAIError
 
+from vocab_zero.core.llm_client import GemmaClient, OpenAICompatibleClient
 from vocab_zero.core.models import TranslationConfig
-from vocab_zero.core.llm_client import OpenAICompatibleClient, GemmaClient
 
 
 @pytest.fixture
