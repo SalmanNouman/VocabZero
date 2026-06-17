@@ -400,9 +400,9 @@ def test_gemma_frequency_fingerprint_returns_none(gemma_client: GemmaClient) -> 
 def test_gemma_lazy_pipeline_loads_on_first_call(gemma_client: GemmaClient) -> None:
     assert gemma_client._pipeline is None
     mock_pipe = _make_mock_gemma_pipeline('{"translation": "hello", "reasoning": "test", "confidence": 0.8}')
-    with patch("vocab_zero.core.llm_client.pipeline", mock_pipe, create=True):
-        with patch.dict("sys.modules", {"transformers": Mock(pipeline=mock_pipe)}):
-            gemma_client._pipeline = mock_pipe
-            result = gemma_client.translate("test")
+    def _fake_load() -> bool:
+        gemma_client._pipeline = mock_pipe
+        return True
+    with patch.object(gemma_client, '_load_pipeline', side_effect=_fake_load) as mock_load:
+        result = gemma_client.translate("test")
     assert result is not None
-
