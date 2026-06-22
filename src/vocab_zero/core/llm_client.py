@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 from typing import TYPE_CHECKING, Any, Protocol
 
 from openai import OpenAI, OpenAIError
 from pydantic import ValidationError
+import torch
+from transformers import pipeline  # type: ignore[import-untyped]
 
 from vocab_zero.core.models import LLMResponse, TranslationConfig
 
@@ -168,11 +171,7 @@ class GemmaClient:
         if self._pipeline is not None:
             return True
         try:
-            import importlib.util
-            import torch
-            from transformers import pipeline  # type: ignore[import-untyped]
-
-            use_4bit = torch.cude.is_available() and importlib.util.find_spec("bitsandbytes") is not None
+            use_4bit = torch.cuda.is_available() and importlib.util.find_spec("bitsandbytes") is not None
             self._pipeline = pipeline(
                 "text-generation",
                 model=self.model_name,
