@@ -9,7 +9,7 @@ from vocab_zero.core.dictionary import LexiconEntry
 from vocab_zero.core.models import FeedbackRequest, TranslationResult
 from vocab_zero.interfaces.api import app
 
-MFCC_NUM_COEFFICIENTS = 12
+MFCC_NUM_COEFFICIENTS = 36
 
 
 class MockEngine:
@@ -263,7 +263,7 @@ def test_translate_audio_match(client):
             source_term="200_500",
             target_term="hello",
             confidence=1.0,
-            mfcc_template=dummy_mfcc,
+            mfcc_templates=[dummy_mfcc],
         )
     }
 
@@ -293,7 +293,7 @@ def test_translate_audio_no_match(client):
             source_term="200_500",
             target_term="hello",
             confidence=1.0,
-            mfcc_template=dummy_mfcc,
+            mfcc_templates=[dummy_mfcc],
         )
     }
 
@@ -341,9 +341,10 @@ def test_feedback_audio_save(client):
     entry = args[0]
     assert entry.source_term == "200_500"
     assert entry.target_term == "hello"
-    assert entry.mfcc_template is not None
-    assert len(entry.mfcc_template) > 0
-    assert len(entry.mfcc_template[0]) == MFCC_NUM_COEFFICIENTS
+    assert entry.mfcc_templates
+    assert len(entry.mfcc_templates) > 0
+    assert len(entry.mfcc_templates[0]) > 0
+    assert len(entry.mfcc_templates[0][0]) == MFCC_NUM_COEFFICIENTS
 
 
 def test_websocket_translate_text(client):

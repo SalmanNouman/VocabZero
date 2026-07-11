@@ -34,3 +34,4 @@ lexicon.json.tmp
 .vscode/
 .DS_Store
 Thumbs.db
+.devin/
