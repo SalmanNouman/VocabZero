@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from threading import RLock
 from typing import Iterator, Protocol, TypeAlias
 
 from pydantic import BaseModel, Field, ValidationError
+
+from vocab_zero.utils.audio import k_medoids
 
 JsonValue: TypeAlias = str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
 JsonObject: TypeAlias = dict[str, JsonValue]
@@ -15,7 +18,45 @@ class LexiconEntry(BaseModel):
     target_term: str
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     context_examples: list[str] = Field(default_factory=list)
-    mfcc_template: list[list[float]] | None = Field(default=None)
+    mfcc_templates: list[list[list[float]]] = Field(default_factory=list)
+
+
+class NGramModel:
+    def __init__(self) -> None:
+        self.bigram_counts: dict[str, dict[str, int]] = {}
+        self.unigram_counts: dict[str, int] = {}
+
+    def train_on_sentence(self, sentence: str) -> None:
+        if not sentence:
+            return
+        words = [w.strip().strip(".,?!;:()\"'").lower() for w in sentence.split() if w.strip()]
+        if not words:
+            return
+        for i in range(len(words)):
+            curr = words[i]
+            self.unigram_counts[curr] = self.unigram_counts.get(curr, 0) + 1
+            if i > 0:
+                prev = words[i - 1]
+                if prev not in self.bigram_counts:
+                    self.bigram_counts[prev] = {}
+                self.bigram_counts[prev][curr] = self.bigram_counts[prev].get(curr, 0) + 1
+
+    def get_transition_probability(self, prev_word: str | None, curr_word: str) -> float:
+        curr = curr_word.strip().lower()
+        if not prev_word:
+            count = self.unigram_counts.get(curr, 0)
+            total = sum(self.unigram_counts.values())
+            v = len(self.unigram_counts)
+            return (count + 0.1) / (total + 0.1 * v) if total > 0 else 1.0 / (v if v > 0 else 100)
+
+        prev = prev_word.strip().lower()
+        prev_count = self.unigram_counts.get(prev, 0)
+        if prev_count == 0 or prev not in self.bigram_counts:
+            return self.get_transition_probability(None, curr)
+
+        curr_count = self.bigram_counts[prev].get(curr, 0)
+        v = len(self.unigram_counts)
+        return (curr_count + 0.1) / (prev_count + 0.1 * v)
 
 
 class Serializer(Protocol):
@@ -40,60 +81,96 @@ class DictionaryManager:
         self.path = Path(path)
         self.serializer = serializer or JsonSerializer()
         self._entries: dict[str, LexiconEntry] = {}
+        self.ngram_model = NGramModel()
+        self._lock = RLock()
         self.load()
 
     def lookup(self, source_term: str) -> LexiconEntry | None:
-        return self._entries.get(source_term)
+        with self._lock:
+            return self._entries.get(source_term)
+
+    def lookup_by_hash(self, acoustic_hash: str) -> LexiconEntry | None:
+        """Lookup a lexicon entry by its acoustic-hash source_term (e.g. ``sound_8f2a1c``).
+
+        Semantically identical to ``lookup``; named to make intent clear when
+        the source_term is an auto-generated acoustic hash rather than text.
+        """
+        with self._lock:
+            return self._entries.get(acoustic_hash)
 
     def insert(self, entry: LexiconEntry) -> bool:
-        if entry.source_term in self._entries:
-            return False
-        self._entries[entry.source_term] = entry
-        return True
+        with self._lock:
+            if entry.source_term in self._entries:
+                return False
+            self._entries[entry.source_term] = entry
+            for example in entry.context_examples:
+                self.ngram_model.train_on_sentence(example)
+            return True
 
     def upsert(self, entry: LexiconEntry) -> LexiconEntry:
-        self._entries[entry.source_term] = entry
-        return entry
+        with self._lock:
+            self._entries[entry.source_term] = entry
+            for example in entry.context_examples:
+                self.ngram_model.train_on_sentence(example)
+            return entry
 
     def update_confidence(self, source_term: str, delta: float) -> LexiconEntry | None:
-        entry = self.lookup(source_term)
-        if entry is None:
-            return None
-        confidence = min(1.0, max(0.0, entry.confidence + delta))
-        updated = entry.model_copy(update={"confidence": confidence})
-        self._entries[source_term] = updated
-        return updated
+        with self._lock:
+            entry = self._entries.get(source_term)
+            if entry is None:
+                return None
+            confidence = min(1.0, max(0.0, entry.confidence + delta))
+            updated = entry.model_copy(update={"confidence": confidence})
+            self._entries[source_term] = updated
+            return updated
 
     def delete(self, source_term: str) -> bool:
-        if source_term not in self._entries:
-            return False
-        del self._entries[source_term]
-        return True
+        with self._lock:
+            if source_term not in self._entries:
+                return False
+            del self._entries[source_term]
+            return True
 
     def has(self, source_term: str) -> bool:
-        return source_term in self._entries
+        with self._lock:
+            return source_term in self._entries
 
     def iter_entries(self) -> Iterator[LexiconEntry]:
-        return iter(self._entries.values())
+        with self._lock:
+            return iter(list(self._entries.values()))
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = self.path.with_name(f"{self.path.name}.tmp")
-        temp_path.write_text(self.serializer.dumps(self._dump_entries()), encoding="utf-8")
-        temp_path.replace(self.path)
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self.path.with_name(f"{self.path.name}.tmp")
+            temp_path.write_text(self.serializer.dumps(self._dump_entries()), encoding="utf-8")
+            temp_path.replace(self.path)
 
     def load(self) -> bool:
-        if not self.path.exists():
-            return False
+        with self._lock:
+            if not self.path.exists():
+                return False
 
-        try:
-            loaded = self.serializer.loads(self.path.read_text(encoding="utf-8"))
-            entries = self._parse_entries(loaded)
-        except (OSError, json.JSONDecodeError, ValidationError, TypeError, ValueError):
-            return False
+            try:
+                loaded = self.serializer.loads(self.path.read_text(encoding="utf-8"))
+                entries = self._parse_entries(loaded)
+            except (OSError, json.JSONDecodeError, ValidationError, TypeError, ValueError):
+                return False
 
-        self._entries = entries
-        return True
+            self._entries = entries
+            self.ngram_model = NGramModel()
+            for entry in self._entries.values():
+                for example in entry.context_examples:
+                    self.ngram_model.train_on_sentence(example)
+            return True
+
+    def prune_templates(self, max_templates: int = 5) -> None:
+        with self._lock:
+            for entry in list(self._entries.values()):
+                if len(entry.mfcc_templates) > max_templates:
+                    pruned = k_medoids(entry.mfcc_templates, max_templates)
+                    entry.mfcc_templates = pruned
+            self.save()
 
     def _dump_entries(self) -> JsonObject:
         return {
