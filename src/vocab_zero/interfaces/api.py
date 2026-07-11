@@ -84,15 +84,15 @@ def perform_audio_matching(
     min_dist = float("inf")
 
     for entry in dictionary.iter_entries():
-        template = entry.mfcc_template
-        if template:
-            if any(len(frame) != expected_dims for frame in template):
-                logger.warning("Skipping invalid mfcc_template for '%s'", entry.source_term)
-                continue
-            dist = dtw_distance(query_mfcc, template)
-            if dist < min_dist:
-                min_dist = dist
-                best_match = entry
+        for template in entry.mfcc_templates:
+            if template:
+                if any(len(frame) != expected_dims for frame in template):
+                    logger.warning("Skipping invalid mfcc_templates for '%s'", entry.source_term)
+                    continue
+                dist = dtw_distance(query_mfcc, template)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_match = entry
 
     return AudioMatchResult(best_match, min_dist)
 
@@ -127,16 +127,18 @@ def process_feedback(
     context: str | None,
     engine: TranslationEngine,
 ) -> tuple[LexiconEntry, TranslationResult]:
-    mfcc_template = None
+    mfcc_templates: list[list[list[float]]] = []
     if audio_data is not None and len(audio_data) > 0:
         if len(audio_data) > MAX_AUDIO_SIZE:
             logger.warning("Audio payload exceeds maximum size in feedback: %d samples", len(audio_data))
             raise ValueError(f"Audio payload exceeds maximum size of {MAX_AUDIO_SIZE} samples")
-        mfcc_template = extract_mfcc(audio_data, sample_rate=16000)
+        template = extract_mfcc(audio_data, sample_rate=16000)
         logger.debug(
-            "Generated MFCC template for feedback (shape %dx13)",
-            len(mfcc_template),
+            "Generated MFCC template for feedback (shape %dx%d)",
+            len(template),
+            len(template[0]) if template else 0,
         )
+        mfcc_templates = [template]
 
     stripped_source = source_term.strip()
     stripped_target = target_term.strip()
@@ -148,7 +150,7 @@ def process_feedback(
         target_term=stripped_target,
         confidence=1.0,
         context_examples=[context] if context else [],
-        mfcc_template=mfcc_template,
+        mfcc_templates=mfcc_templates,
     )
 
     result = engine.persist_learned_entry(entry)
