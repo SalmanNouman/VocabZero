@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""Audio feature extraction and acoustic matching utilities.
+
+Provides MFCC extraction with VTLN, liftering, CMVN and deltas, plus
+DTW distance, subsequence DTW, acoustic hashing, and k-medoids clustering
+for the VocabZero acoustic matching pipeline.
+"""
+
 import hashlib
 
 import numpy as np
