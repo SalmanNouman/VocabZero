@@ -406,3 +406,51 @@ def test_gemma_lazy_pipeline_loads_on_first_call(gemma_client: GemmaClient) -> N
     with patch.object(gemma_client, '_load_pipeline', side_effect=_fake_load):
         result = gemma_client.translate("test")
     assert result is not None
+
+
+def test_openai_select_best_candidate(client: OpenAICompatibleClient) -> None:
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = '{"selected": "plastic", "reasoning": "fits bags context", "confidence": 0.95}'
+
+    with patch.object(client._client, "chat") as mock_chat:
+        mock_chat.completions.create.return_value = mock_response
+        result = client.select_best_candidate(["plastic", "paper", "four"], "I bought [unknown] bags")
+        assert result is not None
+        assert result[0] == "plastic"
+        assert result[1] == 0.95
+
+
+def test_gemma_select_best_candidate_hf(gemma_client: GemmaClient) -> None:
+    gemma_client._pipeline = _make_mock_gemma_pipeline(
+        '{"selected": "plastic", "reasoning": "fits context", "confidence": 0.9}'
+    )
+    result = gemma_client.select_best_candidate(["plastic", "paper"], "I bought [mask] bags")
+    assert result is not None
+    assert result[0] == "plastic"
+    assert result[1] == 0.9
+
+
+def test_openai_translate_masked_sentence_completion(client: OpenAICompatibleClient) -> None:
+    mock_response = Mock()
+    mock_response.choices = [Mock()]
+    mock_response.choices[0].message.content = (
+        '{"translation": "four, plastic, three", "reasoning": "masked fill", "confidence": 0.95}'
+    )
+
+    with patch.object(client._client, "chat") as mock_chat:
+        mock_chat.completions.create.return_value = mock_response
+        result = client.translate("I bought [unknown] bags")
+
+        assert result is not None
+        assert result.translation == "four, plastic, three"
+        assert result.reasoning == "masked fill"
+        assert result.confidence == 0.95
+
+        # Verify the prompt contained instructions for masked completion
+        args = mock_chat.completions.create.call_args[1]
+        messages = args["messages"]
+        system_msg = next(m["content"] for m in messages if m["role"] == "system")
+        assert "masked/unknown word" in system_msg
+        assert "comma-separated list" in system_msg
+
