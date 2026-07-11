@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from vocab_zero.core.models import AudioConfig
-from vocab_zero.utils.audio import dtw_distance, extract_mfcc
+from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc, subsequence_dtw
 
 
 def test_extract_mfcc_empty():
@@ -11,23 +11,98 @@ def test_extract_mfcc_empty():
     assert extract_mfcc(np.array([])) == []
 
 
+def _sine_signal(sample_rate: int = 16000, duration: float = 1.0, freq: float = 440.0) -> np.ndarray:
+    t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+    return np.sin(2 * np.pi * freq * t)
+
+
 def test_extract_mfcc_dims():
-    # Generate 1 second of a 440Hz sine wave at 16kHz sample rate
     sample_rate = 16000
-    t = np.linspace(0, 1.0, sample_rate, endpoint=False)
-    signal = np.sin(2 * np.pi * 440 * t)
+    signal = _sine_signal(sample_rate=sample_rate)
 
     mfccs = extract_mfcc(signal, sample_rate=sample_rate)
 
     assert isinstance(mfccs, list)
     assert len(mfccs) > 0
     assert isinstance(mfccs[0], list)
-    assert len(mfccs[0]) == 12  # 13 coefficients minus 1 (energy coefficient discarded)
+    # Default AudioConfig has use_deltas=True -> 36 dims (12 static + 12 delta + 12 delta-delta)
+    assert len(mfccs[0]) == 36
+
+
+def test_deltas_produce_36_dims():
+    signal = _sine_signal()
+    cfg = AudioConfig(use_deltas=True, use_cmvn=False, use_vtln=False, use_liftering=False)
+    mfccs = extract_mfcc(signal, audio_config=cfg)
+    assert len(mfccs) > 0
+    assert len(mfccs[0]) == 36
+
+
+def test_no_deltas_fallback_12_dims():
+    signal = _sine_signal()
+    cfg = AudioConfig(use_deltas=False, use_cmvn=False, use_vtln=False, use_liftering=False)
+    mfccs = extract_mfcc(signal, audio_config=cfg)
+    assert len(mfccs) > 0
+    assert len(mfccs[0]) == 12
+
+
+def test_cmvn_normalizes_mean_to_zero():
+    signal = _sine_signal()
+    cfg = AudioConfig(use_cmvn=True, use_vtln=False, use_liftering=False, use_deltas=False)
+    mfccs = extract_mfcc(signal, audio_config=cfg)
+    arr = np.array(mfccs)
+    means = arr.mean(axis=0)
+    assert np.allclose(means, 0.0, atol=1e-5)
+
+
+def test_vtln_warping_changes_filterbank():
+    signal = _sine_signal(freq=300.0)
+    cfg_off = AudioConfig(use_cmvn=False, use_vtln=False, use_liftering=False, use_deltas=False)
+    cfg_on = AudioConfig(use_cmvn=False, use_vtln=True, use_liftering=False, use_deltas=False)
+    # Force distinct alpha by monkeypatching the estimator.
+    import vocab_zero.utils.audio as audio_mod
+
+    orig = audio_mod._estimate_vtln_alpha
+    audio_mod._estimate_vtln_alpha = lambda sig, sr: 0.8
+    try:
+        off = extract_mfcc(signal, audio_config=cfg_off)
+        on = extract_mfcc(signal, audio_config=cfg_on)
+    finally:
+        audio_mod._estimate_vtln_alpha = orig
+    assert off != on
+
+
+def test_liftering_suppresses_low_quefrency():
+    signal = _sine_signal(freq=200.0)
+    cfg_off = AudioConfig(use_cmvn=False, use_vtln=False, use_liftering=False, use_deltas=False)
+    cfg_on = AudioConfig(use_cmvn=False, use_vtln=False, use_liftering=True, lifter_coef=22, use_deltas=False)
+    off = extract_mfcc(signal, audio_config=cfg_off)
+    on = extract_mfcc(signal, audio_config=cfg_on)
+    # C1 (index 0 after C0 drop) magnitude should differ under liftering
+    assert abs(on[0][0]) != abs(off[0][0])
+
+
+def test_acoustic_hash_deterministic():
+    features = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    h1 = acoustic_hash(features)
+    h2 = acoustic_hash(features)
+    assert h1 == h2
+    assert h1.startswith("sound_")
+    assert len(h1) == len("sound_") + 8
+
+
+def test_acoustic_hash_differs_for_different_features():
+    f1 = [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]
+    f2 = [[0.1, 0.2, 0.9], [0.4, 0.5, 0.6]]
+    assert acoustic_hash(f1) != acoustic_hash(f2)
+
+
+def test_acoustic_hash_empty():
+    assert acoustic_hash([]) == "sound_00000000"
+    assert acoustic_hash([[]]) == "sound_00000000"
 
 
 def test_dtw_distance_identical():
     m1 = [[0.1 * i] * 12 for i in range(10)]
-    # DTW distance between identical matrices should be exactly 0
     assert dtw_distance(m1, m1) == 0.0
 
 
@@ -42,6 +117,36 @@ def test_dtw_distance_empty():
     m1 = [[0.1] * 12]
     assert dtw_distance([], m1) == float("inf")
     assert dtw_distance(m1, []) == float("inf")
+
+
+def test_subsequence_dtw():
+    template = [[0.1 * i] * 12 for i in range(1, 6)]
+    stream = [[0.9] * 12 for _ in range(3)] + template + [[0.9] * 12 for _ in range(4)]
+
+    detections = subsequence_dtw(template, stream, threshold=15.0)
+    assert len(detections) > 0
+    dist, start, end = detections[0]
+    assert dist == 0.0
+    assert start == 3
+    assert end == 7
+
+
+def test_subsequence_dtw_empty():
+    assert subsequence_dtw([], [], threshold=15.0) == []
+    assert subsequence_dtw([[0.1] * 12], [], threshold=15.0) == []
+    assert subsequence_dtw([], [[0.1] * 12], threshold=15.0) == []
+
+
+def test_k_medoids():
+    from vocab_zero.utils.audio import k_medoids
+    t1 = [[0.1] * 12 for _ in range(5)]
+    t2 = [[0.2] * 12 for _ in range(5)]
+    t3 = [[0.11] * 12 for _ in range(5)]
+
+    templates = [t1, t2, t3]
+    medoids = k_medoids(templates, 2)
+    assert len(medoids) == 2
+    assert len(k_medoids(templates, 4)) == 3
 
 
 def test_audio_config_save_and_load_calibration(tmp_path):
