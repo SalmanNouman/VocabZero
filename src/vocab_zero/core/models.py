@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import logging
 import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -70,3 +73,83 @@ class TranslationConfig(BaseModel):
             base_url=os.getenv("OPENAI_BASE_URL"),
             model_name=os.getenv("LLM_MODEL_NAME", "gpt-4o-mini"),
         )
+
+
+class AudioConfig(BaseModel):
+    sample_rate: int = Field(default=16000, ge=8000)
+    num_cepstrum: int = Field(default=13, ge=2, le=40)
+    num_filters: int = Field(default=26, ge=10, le=80)
+    nfft: int = Field(default=512, ge=128)
+    preemph: float = Field(default=0.97, ge=0.0, le=1.0)
+    use_cmvn: bool = True
+    use_vtln: bool = True
+    use_liftering: bool = True
+    lifter_coef: int = Field(default=22, ge=1, le=50)
+    use_deltas: bool = True
+    # Calibrated via /api/calibrate or set via VOCABZERO_DTW_THRESHOLD_36/12
+    # env vars. Same-word pairs should typically fall below 1.0; different-word
+    # pairs above 2.0. Use the calibration wizard to find exact values for your
+    # mic and environment.
+    dtw_threshold_36: float = Field(default=1.8, gt=0.0)
+    dtw_threshold_12: float = Field(default=1.2, gt=0.0)
+    min_confidence_gate: float = Field(default=0.6, ge=0.0, le=1.0)
+
+    @property
+    def dtw_threshold(self) -> float:
+        return self.dtw_threshold_36 if self.use_deltas else self.dtw_threshold_12
+
+    @classmethod
+    def from_env(cls) -> AudioConfig:
+        def _env_bool(name: str, default: bool) -> bool:
+            raw = os.getenv(name)
+            if raw is None:
+                return default
+            return raw.strip().lower() in ("1", "true", "yes", "on")
+
+        def _env_float(name: str, default: float) -> float:
+            raw = os.getenv(name)
+            if raw is None:
+                return default
+            return float(raw.strip())
+
+        return cls(
+            use_cmvn=_env_bool("VOCABZERO_CMVN", True),
+            use_vtln=_env_bool("VOCABZERO_VTLN", True),
+            use_liftering=_env_bool("VOCABZERO_LIFTERING", True),
+            use_deltas=_env_bool("VOCABZERO_DELTAS", True),
+            dtw_threshold_36=_env_float("VOCABZERO_DTW_THRESHOLD_36", 1.8),
+            dtw_threshold_12=_env_float("VOCABZERO_DTW_THRESHOLD_12", 1.2),
+            min_confidence_gate=_env_float("VOCABZERO_MIN_CONFIDENCE", 0.6),
+        )
+
+    def save_calibration(self, path: Path) -> None:
+        """Persist DTW thresholds and confidence gate to a calibration file."""
+        data = {
+            "dtw_threshold_36": self.dtw_threshold_36,
+            "dtw_threshold_12": self.dtw_threshold_12,
+            "min_confidence_gate": self.min_confidence_gate,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = path.with_name(f"{path.name}.tmp")
+        temp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        temp_path.replace(path)
+
+    @classmethod
+    def load_calibration(cls, path: Path, base: AudioConfig) -> AudioConfig:
+        """Load calibration from file, merging with a base AudioConfig."""
+        logger = logging.getLogger(__name__)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            updates: dict[str, float] = {}
+            if "dtw_threshold_36" in data:
+                updates["dtw_threshold_36"] = float(data["dtw_threshold_36"])
+            if "dtw_threshold_12" in data:
+                updates["dtw_threshold_12"] = float(data["dtw_threshold_12"])
+            if "min_confidence_gate" in data:
+                updates["min_confidence_gate"] = float(data["min_confidence_gate"])
+            if updates:
+                logger.info("Loaded calibration from %s: %s", path, updates)
+                return base.model_copy(update=updates)
+        except (OSError, json.JSONDecodeError, ValueError, TypeError) as exc:
+            logger.warning("Failed to load calibration from %s: %s", path, exc)
+        return base
