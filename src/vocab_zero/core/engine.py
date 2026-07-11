@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Callable
 
 from vocab_zero.core.dictionary import DictionaryManager, LexiconEntry
@@ -329,6 +330,8 @@ class TranslationEngine:
 
         if len(candidates) == 1:
             conf = float(max(0.0, min(1.0, 1.0 - (best_dist / dtw_threshold))))
+            if conf < self.audio_config.min_confidence_gate:
+                return None, 0.0
             return best_entry, conf
 
         second_entry, second_dist = candidates[1]
@@ -368,7 +371,10 @@ class TranslationEngine:
                             llm_conf = confidence
                             break
             except Exception:
-                pass
+                logging.getLogger(__name__).warning(
+                    "LLM select_best_candidate failed; falling back to acoustic + ngram scoring",
+                    exc_info=True,
+                )
 
         # Combined scoring to choose the winner
         best_ranked_entry = best_entry
@@ -402,4 +408,6 @@ class TranslationEngine:
         else:
             final_conf = winner_acoustic_conf
 
+        if final_conf < self.audio_config.min_confidence_gate:
+            return None, 0.0
         return best_ranked_entry, final_conf
