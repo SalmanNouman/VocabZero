@@ -41,12 +41,14 @@ def build_engine(
         vector_store = VectorStoreClient(persist_dir=vector_db_path)
 
     config = TranslationConfig.from_env()
-    effective_audio_config = audio_config or AudioConfig.from_env()
-
-    calibration_path = Path(dictionary_path).parent / "calibration.json"
-    if calibration_path.exists():
-        effective_audio_config = AudioConfig.load_calibration(calibration_path, effective_audio_config)
-        _logger.info("Loaded calibration from %s", calibration_path)
+    if audio_config is not None:
+        effective_audio_config = audio_config
+    else:
+        effective_audio_config = AudioConfig.from_env()
+        calibration_path = Path(dictionary_path).parent / "calibration.json"
+        if calibration_path.exists():
+            effective_audio_config = AudioConfig.load_calibration(calibration_path, effective_audio_config)
+            _logger.info("Loaded calibration from %s", calibration_path)
 
     llm_client: GemmaClient | OpenAICompatibleClient | None = None
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
