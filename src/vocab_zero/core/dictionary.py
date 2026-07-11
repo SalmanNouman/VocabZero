@@ -110,8 +110,10 @@ class DictionaryManager:
     def upsert(self, entry: LexiconEntry) -> LexiconEntry:
         with self._lock:
             self._entries[entry.source_term] = entry
-            for example in entry.context_examples:
-                self.ngram_model.train_on_sentence(example)
+            self.ngram_model = NGramModel()
+            for stored in self._entries.values():
+                for example in stored.context_examples:
+                    self.ngram_model.train_on_sentence(example)
             return entry
 
     def update_confidence(self, source_term: str, delta: float) -> LexiconEntry | None:
