@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Callable
 
 from vocab_zero.core.dictionary import DictionaryManager, LexiconEntry
 from vocab_zero.core.llm_client import LLMClient
 from vocab_zero.core.models import (
+    AudioConfig,
     FeedbackRequest,
     TranslationConfig,
     TranslationResult,
@@ -23,12 +25,14 @@ class TranslationEngine:
         llm_client: LLMClient | None = None,
         config: TranslationConfig | None = None,
         on_feedback_required: Callable[[FeedbackRequest], LexiconEntry | None] | None = None,
+        audio_config: AudioConfig | None = None,
     ) -> None:
         self.dictionary = dictionary
         self.vector_store = vector_store
         self.llm_client = llm_client
         self.config = config or TranslationConfig()
         self.on_feedback_required = on_feedback_required
+        self.audio_config = audio_config or AudioConfig()
 
     def translate(
         self,
@@ -298,3 +302,112 @@ class TranslationEngine:
             error_code=vector_error,
             error_message="Semantic index update failed" if vector_error else None,
         )
+
+    def rerank_acoustic_candidates(
+        self,
+        candidates: list[tuple[LexiconEntry, float]],
+        context: str | None = None,
+    ) -> tuple[LexiconEntry | None, float]:
+        """Rerank candidates using acoustic DTW, N-Gram probability, and optionally LLM semantic ranking.
+
+        Returns:
+            Tuple of (selected_entry, confidence).
+        """
+        if not candidates:
+            return None, 0.0
+
+        # DTW distance threshold sourced from AudioConfig (dimension-aware)
+        dtw_threshold = self.audio_config.dtw_threshold
+
+        # Sort candidates by DTW distance (ascending)
+        candidates = sorted(candidates, key=lambda x: x[1])
+
+        best_entry, best_dist = candidates[0]
+
+        # Check if the acoustic distance is below the threshold. If even the best is above, it's not a match.
+        if best_dist >= dtw_threshold:
+            return None, 0.0
+
+        if len(candidates) == 1:
+            conf = float(max(0.0, min(1.0, 1.0 - (best_dist / dtw_threshold))))
+            if conf < self.audio_config.min_confidence_gate:
+                return None, 0.0
+            return best_entry, conf
+
+        second_entry, second_dist = candidates[1]
+
+
+        # Phonetic ambiguity threshold (proportional to DTW threshold)
+        dtw_diff_threshold = dtw_threshold * 0.15
+        ambiguous = (second_dist - best_dist) < dtw_diff_threshold
+
+        # 1. Apply N-gram language model
+        last_word = None
+        if context:
+            words = [w.strip().lower() for w in context.split() if w.strip()]
+            if words:
+                last_word = words[-1]
+
+        # Calculate N-gram transition probabilities
+        ngram_probs = {}
+        for entry, dist in candidates:
+            prob = self.dictionary.ngram_model.get_transition_probability(last_word, entry.target_term)
+            ngram_probs[entry.source_term] = prob
+
+        # 2. Apply LLM reranking if ambiguous and LLM is available
+        llm_selected = None
+        llm_conf = 0.0
+        if ambiguous and self.llm_client is not None and context:
+            # Get target terms of top 5 candidates
+            target_options = [entry.target_term for entry, _ in candidates[:5]]
+            try:
+                llm_result = self.llm_client.select_best_candidate(target_options, context)
+                if llm_result:
+                    selected_term, confidence = llm_result
+                    # Find matching entry
+                    for entry, _ in candidates:
+                        if entry.target_term.strip().lower() == selected_term.strip().lower():
+                            llm_selected = entry
+                            llm_conf = confidence
+                            break
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "LLM select_best_candidate failed; falling back to acoustic + ngram scoring",
+                    exc_info=True,
+                )
+
+        # Combined scoring to choose the winner
+        best_ranked_entry = best_entry
+        highest_score = -1.0
+
+        for entry, dist in candidates:
+            # Acoustic score: 1.0 is perfect, 0.0 is at/above threshold
+            s_acoustic = max(0.0, 1.0 - (dist / dtw_threshold))
+
+            # N-gram score: transition probability (0.0 to 1.0)
+            s_ngram = ngram_probs.get(entry.source_term, 0.0)
+
+            # LLM score
+            s_llm = 0.0
+            if llm_selected is not None and entry.source_term == llm_selected.source_term:
+                s_llm = llm_conf
+
+            # Weighted combined score (acoustic 0.5, ngram 0.2, llm 0.3)
+            score = 0.5 * s_acoustic + 0.2 * s_ngram + 0.3 * s_llm
+
+            if score > highest_score:
+                highest_score = score
+                best_ranked_entry = entry
+
+        # Calculate final confidence
+        winner_dist = next(dist for entry, dist in candidates if entry.source_term == best_ranked_entry.source_term)
+        winner_acoustic_conf = float(max(0.0, min(1.0, 1.0 - (winner_dist / dtw_threshold))))
+
+        if llm_selected is not None and best_ranked_entry.source_term == llm_selected.source_term:
+            final_conf = 0.7 * winner_acoustic_conf + 0.3 * llm_conf
+        else:
+            final_conf = winner_acoustic_conf
+
+        if final_conf < self.audio_config.min_confidence_gate:
+            return None, 0.0
+        return best_ranked_entry, final_conf
