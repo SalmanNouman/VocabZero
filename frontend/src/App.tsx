@@ -56,6 +56,7 @@ export default function App() {
   const [activeTeachIndex, setActiveTeachIndex] = useState<number | null>(null);
   const [dialogInitialValue, setDialogInitialValue] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const autocompleteReqIdRef = useRef(0);
 
   // Web Audio Context & Node references
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -303,6 +304,7 @@ export default function App() {
   };
 
   const fetchAutocomplete = async (maskedSentence: string) => {
+    const reqId = ++autocompleteReqIdRef.current;
     try {
       const response = await fetch("/api/autocomplete", {
         method: "POST",
@@ -310,12 +312,14 @@ export default function App() {
         body: JSON.stringify({ sentence: maskedSentence }),
       });
       const result = await response.json();
+      if (reqId !== autocompleteReqIdRef.current) return;
       if (result.ok && result.data?.suggestions) {
         setSuggestions(result.data.suggestions);
       } else {
         setSuggestions([]);
       }
     } catch (err) {
+      if (reqId !== autocompleteReqIdRef.current) return;
       console.error("Failed to fetch autocomplete suggestions:", err);
       setSuggestions([]);
     }
