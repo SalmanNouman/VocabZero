@@ -24,8 +24,12 @@ export interface EnergyHistoryItem {
 
 export interface AudioConfig {
   sample_rate: number;
-  channels: number;
   dtw_threshold_36: number;
   dtw_threshold_12: number;
+  dtw_threshold: number;
   min_confidence_gate: number;
+  use_deltas: boolean;
+  use_cmvn: boolean;
+  use_vtln: boolean;
+  use_liftering: boolean;
 }
