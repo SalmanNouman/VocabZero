@@ -59,6 +59,8 @@ export const CalibrationWizard: React.FC<CalibrationWizardProps> = ({
 
   // Step 2 variables
 
+  const [isReady, setIsReady] = useState(false);
+
   const [isComputing, setIsComputing] = useState(false);
 
   const [computeError, setComputeError] = useState<string | null>(null);
@@ -115,27 +117,36 @@ export const CalibrationWizard: React.FC<CalibrationWizardProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      // Reset state on open
-
       setStep(1);
-
       setCurrentPhrase(0);
-
       setCurrentRep(0);
-
       setIsRecording(false);
-
-      setStatusMsg("Record 3 words, 3 times each. Ready to start.");
-
+      setIsReady(false);
+      setStatusMsg("Clearing previous samples...");
       setComputeData(null);
-
       setComputeError(null);
 
-      // Clear samples on backend
-
-      fetch("/api/calibrate/samples", { method: "DELETE" }).catch(
-        console.error,
-      );
+      (async () => {
+        try {
+          const resp = await fetch("/api/calibrate/samples", {
+            method: "DELETE",
+          });
+          const result = await resp.json();
+          if (resp.ok && result.ok) {
+            setStatusMsg("Record 3 words, 3 times each. Ready to start.");
+            setIsReady(true);
+          } else {
+            setStatusMsg(
+              "Failed to clear previous samples. Please close and retry.",
+            );
+          }
+        } catch (err) {
+          console.error(err);
+          setStatusMsg(
+            "Network error clearing samples. Please close and retry.",
+          );
+        }
+      })();
     }
 
     return () => {
@@ -519,11 +530,12 @@ export const CalibrationWizard: React.FC<CalibrationWizardProps> = ({
               {!isStep1Done && (
                 <button
                   onClick={handleRecordToggle}
+                  disabled={!isReady}
                   className={`py-3 px-6 rounded-lg text-sm font-semibold flex items-center gap-2 cursor-pointer transition-all active:scale-[0.98] ${
                     isRecording
                       ? "bg-destructive hover:bg-destructive text-destructive-foreground pulse-ring-active"
                       : "bg-primary hover:bg-primary text-primary-foreground"
-                  }`}
+                  } ${!isReady ? "opacity-50 cursor-not-allowed" : ""}`}
                 >
                   <Mic className="h-4.5 w-4.5" />
 
