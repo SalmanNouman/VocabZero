@@ -4,7 +4,7 @@ export interface LexiconEntry {
   confidence?: number;
   count?: number;
   audio_hash?: string;
-  context?: string;
+  context_examples: string[];
 }
 
 export interface Detection {
