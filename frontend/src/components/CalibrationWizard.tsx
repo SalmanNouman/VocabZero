@@ -256,7 +256,11 @@ export const CalibrationWizard: React.FC<CalibrationWizardProps> = ({
       setStatusMsg(
         "No speech detected. Speak louder or reduce Gate Threshold.",
       );
+      return;
+    }
 
+    if (segments.length !== 1) {
+      setStatusMsg("Please speak only one word per recording. Try again.");
       return;
     }
 
@@ -267,28 +271,21 @@ export const CalibrationWizard: React.FC<CalibrationWizardProps> = ({
     try {
       let success = true;
 
-      for (const segment of segments) {
-        const resp = await fetch("/api/calibrate/sample", {
-          method: "POST",
+      const segment = segments[0];
+      const resp = await fetch("/api/calibrate/sample", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: label,
+          audio_data: Array.from(segment),
+        }),
+      });
 
-          headers: { "Content-Type": "application/json" },
+      const res = await resp.json();
 
-          body: JSON.stringify({
-            label: label,
-
-            audio_data: Array.from(segment),
-          }),
-        });
-
-        const res = await resp.json();
-
-        if (!res.ok) {
-          success = false;
-
-          setStatusMsg(`Error: ${res.error?.message || "Failed to submit"}`);
-
-          break;
-        }
+      if (!res.ok) {
+        success = false;
+        setStatusMsg(`Error: ${res.error?.message || "Failed to submit"}`);
       }
 
       if (success) {
