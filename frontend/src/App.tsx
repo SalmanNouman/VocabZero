@@ -345,27 +345,32 @@ export default function App() {
       });
       const result = await response.json();
 
-      if (result.ok) {
-        const canonicalSignature =
-          result.data?.source_term || activeTeachSignature;
-
-        setStaticBubbles((prev) =>
-          prev.map((b) =>
-            b.index === activeTeachIndex
-              ? {
-                  ...b,
-                  translatedText: translation,
-                  confidence: 1.0,
-                  signature: canonicalSignature,
-                }
-              : b,
-          ),
-        );
-
-        fetchLexicon();
+      if (!response.ok || !result.ok) {
+        const errMsg = result.error?.message || "Failed to save teach sound";
+        showToast(errMsg);
+        throw new Error(errMsg);
       }
+
+      const canonicalSignature =
+        result.data?.source_term || activeTeachSignature;
+
+      setStaticBubbles((prev) =>
+        prev.map((b) =>
+          b.index === activeTeachIndex
+            ? {
+                ...b,
+                translatedText: translation,
+                confidence: 1.0,
+                signature: canonicalSignature,
+              }
+            : b,
+        ),
+      );
+
+      fetchLexicon();
     } catch (err) {
-      console.error("Failed to submit teach sound feedback:", err);
+      showToast("Failed to submit teach sound feedback");
+      throw err;
     }
   };
 
