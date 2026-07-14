@@ -30,11 +30,11 @@ The `vocabzero-api` entry point serves a FastAPI application with a built-in web
 ### Starting the Server
 
 ```bash
-# Development server with auto-reload
-uv run uvicorn vocab_zero.interfaces.api:app --host 0.0.0.0 --port 8000 --reload
+# Development server with auto-reload (localhost only)
+uv run uvicorn vocab_zero.interfaces.api:app --host 127.0.0.1 --port 8000 --reload
 
-# Production (no reload)
-uv run uvicorn vocab_zero.interfaces.api:app --host 0.0.0.0 --port 8000
+# Production (no reload) — bind to localhost; use a reverse proxy with auth for remote access
+uv run uvicorn vocab_zero.interfaces.api:app --host 127.0.0.1 --port 8000
 ```
 
 The server starts at `http://localhost:8000`. Open this URL in a browser to access the web frontend.
