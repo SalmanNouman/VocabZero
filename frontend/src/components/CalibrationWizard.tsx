@@ -214,10 +214,8 @@ export const CalibrationWizard: React.FC<CalibrationWizardProps> = ({
       };
     } catch (err) {
       console.error(err);
-
+      stopRecordingCleanup();
       setStatusMsg("Failed to access microphone.");
-
-      setIsRecording(false);
     }
   };
 
