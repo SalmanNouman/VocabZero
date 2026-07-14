@@ -34,11 +34,11 @@ export const TeachDialog: React.FC<TeachDialogProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape" && !isSubmitting) onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, isSubmitting]);
 
   if (!isOpen) return null;
 
@@ -59,14 +59,18 @@ export const TeachDialog: React.FC<TeachDialogProps> = ({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
-      onClick={onClose}
+      onClick={() => {
+        if (!isSubmitting) onClose();
+      }}
     >
       <div
         className="bg-popover border border-border rounded-xl max-w-md w-full shadow-[var(--shadow-lg)] p-6 relative"
         onClick={(e) => e.stopPropagation()}
       >
         <button
-          onClick={onClose}
+          onClick={() => {
+            if (!isSubmitting) onClose();
+          }}
           className="absolute right-4 top-4 p-1 rounded-md text-muted-foreground hover:bg-surface-raised hover:text-foreground transition-all cursor-pointer"
         >
           <X className="h-4.5 w-4.5" />
