@@ -87,7 +87,7 @@ Teach the engine a new translation pair. When `audio_data` is provided and the `
 }
 ```
 
-Returns `{"status": "learned"}`.
+Returns `{"status": "learned", "source_term": "<canonical_or_generated_id>"}`. The `source_term` field returns the canonical source term used (auto-generated `sound_<8hex>` if the input did not match an existing entry).
 
 #### `POST /api/autocomplete`
 
@@ -109,6 +109,70 @@ List all lexicon entries with source term, target term, confidence, and context 
 #### `DELETE /api/lexicon/{source_term}`
 
 Remove a lexicon entry by its source term.
+
+#### `GET /api/audio_config`
+
+Returns the current audio processing configuration including DTW thresholds, confidence gate, and normalization flags.
+
+```json
+{
+  "sample_rate": 16000,
+  "dtw_threshold_36": 1.8,
+  "dtw_threshold_12": 1.2,
+  "dtw_threshold": 1.8,
+  "min_confidence_gate": 0.6,
+  "use_deltas": true,
+  "use_cmvn": true,
+  "use_vtln": true,
+  "use_liftering": true
+}
+```
+
+#### `POST /api/calibrate/sample`
+
+Submit a calibration recording for a specific label. Audio is validated (2400–160000 samples), MFCC features are extracted, and stored under the label. Per-label cap: 20 samples. Total cap: 200 samples.
+
+```json
+{
+  "label": "phrase_1",
+  "audio_data": [0.0, 0.1, ...]
+}
+```
+
+Returns `{"label": "phrase_1", "sample_count": 3, "total_samples": 9, "labels": {...}}`.
+
+#### `POST /api/calibrate/compute`
+
+Compute DTW distance statistics from all collected calibration samples. Requires at least 2 labels with 2 recordings each. Returns intra-class and inter-class distance distributions, a suggested threshold, and separation ratio.
+
+```json
+{
+  "intra_class": { "min": 0.5, "max": 1.2, "mean": 0.8, "count": 6 },
+  "inter_class": { "min": 2.1, "max": 3.5, "mean": 2.8, "count": 12 },
+  "suggested_threshold": 1.56,
+  "separation_ratio": 1.75,
+  "well_separated": true,
+  "sample_counts": { "phrase_1": 3, "phrase_2": 3, "phrase_3": 3 }
+}
+```
+
+#### `POST /api/calibrate/apply`
+
+Apply calibrated DTW thresholds and confidence gate. Persists values to `calibration.json`.
+
+```json
+{
+  "dtw_threshold_36": 1.56,
+  "dtw_threshold_12": 1.0,
+  "min_confidence_gate": 0.6
+}
+```
+
+Returns `{"status": "applied", "dtw_threshold_36": 1.56, ...}`.
+
+#### `DELETE /api/calibrate/samples`
+
+Clear all collected calibration samples. Must be called before starting a new calibration session.
 
 ## Vector DB Client
 
