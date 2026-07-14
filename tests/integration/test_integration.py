@@ -52,14 +52,10 @@ def test_integration_flow(temp_env):
     audio_signal_2 = [0.0] * int(0.6 * 16000)  # silence is acoustically distinct from sine
     
     with TestClient(app) as client:
-        # 1. Get index file (check basic static file response or fallback error)
+        # 1. Get index file (bundled frontend HTML)
         response = client.get("/")
         assert response.status_code == 200
-        # If static index.html doesn't exist, we get a json error message:
-        # otherwise we get HTML. Either way it's a valid 200 response.
-        res_data = response.headers.get("content-type")
-        if "application/json" in str(res_data):
-            assert response.json()["ok"] in (True, False)
+        assert "text/html" in response.headers.get("content-type", "")
         
         # 2. Get lexicon (initially empty)
         response = client.get("/api/lexicon")
