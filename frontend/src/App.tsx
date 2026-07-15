@@ -369,7 +369,11 @@ export default function App() {
 
       fetchLexicon();
     } catch (err) {
-      showToast("Failed to submit teach sound feedback");
+      showToast(
+        err instanceof Error
+          ? err.message
+          : "Failed to submit teach sound feedback",
+      );
       throw err;
     }
   };
