@@ -262,7 +262,9 @@ def acoustic_hash(features: list[list[float]]) -> str:
     return f"sound_{digest[:8]}"
 
 
-def dtw_distance(mfcc1: list[list[float]], mfcc2: list[list[float]]) -> float:
+def dtw_distance(
+    mfcc1: list[list[float]], mfcc2: list[list[float]], band_radius: int | None = None
+) -> float:
     """Compute the duration-normalized Dynamic Time Warping (DTW) distance.
 
     Uses dynamic programming to align two MFCC sequence matrices.
@@ -270,6 +272,8 @@ def dtw_distance(mfcc1: list[list[float]], mfcc2: list[list[float]]) -> float:
     Args:
         mfcc1: Matrix (M, 13) of cepstral coefficients.
         mfcc2: Matrix (N, 13) of cepstral coefficients.
+        band_radius: Optional Sakoe-Chiba band radius. If supplied, the radius
+            is clamped to the sequence length difference.
 
     Returns:
         The alignment distance normalized by the sum of sequence lengths.
@@ -281,26 +285,30 @@ def dtw_distance(mfcc1: list[list[float]], mfcc2: list[list[float]]) -> float:
     s1 = np.array(mfcc1)
     s2 = np.array(mfcc2)
 
-    cost = np.zeros((m, n))
+    if band_radius is not None:
+        band_radius = max(int(band_radius), abs(m - n))
+
+    cost = np.full((m, n), float("inf"))
 
     def frame_dist(x: np.ndarray, y: np.ndarray) -> float:
         return float(np.linalg.norm(x - y))
 
-    cost[0, 0] = frame_dist(s1[0], s2[0])
-
-    for i in range(1, m):
-        cost[i, 0] = cost[i - 1, 0] + frame_dist(s1[i], s2[0])
-
-    for j in range(1, n):
-        cost[0, j] = cost[0, j - 1] + frame_dist(s1[0], s2[j])
-
-    for i in range(1, m):
-        for j in range(1, n):
-            cost[i, j] = frame_dist(s1[i], s2[j]) + min(
-                cost[i - 1, j],  # insertion
-                cost[i, j - 1],  # deletion
-                cost[i - 1, j - 1],  # match
-            )
+    for i in range(m):
+        for j in range(n):
+            if band_radius is not None and abs(i - j * m / n) > band_radius:
+                continue
+            distance = frame_dist(s1[i], s2[j])
+            if i == 0 and j == 0:
+                cost[i, j] = distance
+                continue
+            predecessors = []
+            if i > 0:
+                predecessors.append(cost[i - 1, j])
+            if j > 0:
+                predecessors.append(cost[i, j - 1])
+            if i > 0 and j > 0:
+                predecessors.append(cost[i - 1, j - 1])
+            cost[i, j] = distance + min(predecessors)
 
     return float(cost[m - 1, n - 1] / (m + n))
 

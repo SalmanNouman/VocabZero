@@ -10,6 +10,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import numpy as np
 import uvicorn
 
 from fastapi import FastAPI, Request, HTTPException
@@ -78,7 +79,8 @@ def perform_audio_matching_candidates(
         logger.warning("Audio payload exceeds maximum size: %d samples", len(audio_data))
         return []
 
-    query_mfcc = extract_mfcc(audio_data, audio_config=audio_config)
+    config = audio_config or AudioConfig()
+    query_mfcc = extract_mfcc(audio_data, audio_config=config)
 
     if not query_mfcc:
         return []
@@ -87,10 +89,20 @@ def perform_audio_matching_candidates(
 
     candidates = []
     for entry in dictionary.iter_entries():
-        min_entry_dist = float("inf")
+        template_distances = []
         # Evaluate against all stored templates (k-NN style)
         for template in entry.mfcc_templates:
             if not template:
+                continue
+
+            length_ratio = max(len(query_mfcc), len(template)) / min(len(query_mfcc), len(template))
+            if length_ratio > config.max_length_ratio:
+                logger.debug(
+                    "Skipping template for '%s' due to length ratio %.2f > %.2f",
+                    entry.source_term,
+                    length_ratio,
+                    config.max_length_ratio,
+                )
                 continue
 
             if any(len(frame) != expected_dims for frame in template):
@@ -99,13 +111,17 @@ def perform_audio_matching_candidates(
                 )
                 continue
 
-            dist = dtw_distance(query_mfcc, template)
+            band_radius = max(
+                int(np.ceil(config.dtw_band_ratio * max(len(query_mfcc), len(template)))),
+                abs(len(query_mfcc) - len(template)),
+            )
+            distance = dtw_distance(query_mfcc, template, band_radius=band_radius)
+            if distance < float("inf"):
+                template_distances.append(distance)
 
-            if dist < min_entry_dist:
-                min_entry_dist = dist
-
-        if min_entry_dist < float("inf"):
-            candidates.append((entry, min_entry_dist))
+        if template_distances:
+            nearest_distances = sorted(template_distances)[: config.template_agg_k]
+            candidates.append((entry, sum(nearest_distances) / len(nearest_distances)))
 
     # Sort candidates by distance
     candidates.sort(key=lambda x: x[1])
@@ -484,6 +500,11 @@ async def get_audio_config(request: Request):
             "dtw_threshold_12": cfg.dtw_threshold_12,
             "dtw_threshold": cfg.dtw_threshold,
             "min_confidence_gate": cfg.min_confidence_gate,
+            "ambiguity_margin_ratio": cfg.ambiguity_margin_ratio,
+            "ambiguity_confidence_floor": cfg.ambiguity_confidence_floor,
+            "dtw_band_ratio": cfg.dtw_band_ratio,
+            "max_length_ratio": cfg.max_length_ratio,
+            "template_agg_k": cfg.template_agg_k,
             "use_deltas": cfg.use_deltas,
             "use_cmvn": cfg.use_cmvn,
             "use_vtln": cfg.use_vtln,

@@ -93,6 +93,11 @@ class AudioConfig(BaseModel):
     dtw_threshold_36: float = Field(default=1.8, gt=0.0)
     dtw_threshold_12: float = Field(default=1.2, gt=0.0)
     min_confidence_gate: float = Field(default=0.6, ge=0.0, le=1.0)
+    ambiguity_margin_ratio: float = Field(default=0.15, gt=0.0, le=1.0)
+    ambiguity_confidence_floor: float = Field(default=0.4, ge=0.0, le=1.0)
+    dtw_band_ratio: float = Field(default=0.2, ge=0.0)
+    max_length_ratio: float = Field(default=2.5, ge=1.0)
+    template_agg_k: int = Field(default=3, ge=1)
 
     @property
     def dtw_threshold(self) -> float:
@@ -112,6 +117,12 @@ class AudioConfig(BaseModel):
                 return default
             return float(raw.strip())
 
+        def _env_int(name: str, default: int) -> int:
+            raw = os.getenv(name)
+            if raw is None:
+                return default
+            return int(raw.strip())
+
         return cls(
             use_cmvn=_env_bool("VOCABZERO_CMVN", True),
             use_vtln=_env_bool("VOCABZERO_VTLN", True),
@@ -120,6 +131,11 @@ class AudioConfig(BaseModel):
             dtw_threshold_36=_env_float("VOCABZERO_DTW_THRESHOLD_36", 1.8),
             dtw_threshold_12=_env_float("VOCABZERO_DTW_THRESHOLD_12", 1.2),
             min_confidence_gate=_env_float("VOCABZERO_MIN_CONFIDENCE", 0.6),
+            ambiguity_margin_ratio=_env_float("VOCABZERO_AMBIGUITY_MARGIN_RATIO", 0.15),
+            ambiguity_confidence_floor=_env_float("VOCABZERO_AMBIGUITY_CONFIDENCE_FLOOR", 0.4),
+            dtw_band_ratio=_env_float("VOCABZERO_DTW_BAND_RATIO", 0.2),
+            max_length_ratio=_env_float("VOCABZERO_MAX_LENGTH_RATIO", 2.5),
+            template_agg_k=_env_int("VOCABZERO_TEMPLATE_AGG_K", 3),
         )
 
     def save_calibration(self, path: Path) -> None:

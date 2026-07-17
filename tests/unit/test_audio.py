@@ -113,6 +113,25 @@ def test_dtw_distance_different():
     assert dist > 0.0
 
 
+def test_dtw_distance_banded_identical():
+    m1 = [[0.1 * i] * 12 for i in range(10)]
+    assert dtw_distance(m1, m1, band_radius=0) == 0.0
+
+
+def test_dtw_distance_banded_is_not_lower_than_unconstrained():
+    m1 = [[0.0] * 12, [10.0] * 12, [0.0] * 12]
+    m2 = [[0.0] * 12, [0.0] * 12, [10.0] * 12]
+    unconstrained = dtw_distance(m1, m2)
+    banded = dtw_distance(m1, m2, band_radius=0)
+    assert banded >= unconstrained
+
+
+def test_dtw_distance_banded_radius_clamps_to_length_difference():
+    short = [[0.1] * 12 for _ in range(2)]
+    long = [[0.1] * 12 for _ in range(10)]
+    assert dtw_distance(short, long, band_radius=0) < float("inf")
+
+
 def test_dtw_distance_empty():
     m1 = [[0.1] * 12]
     assert dtw_distance([], m1) == float("inf")
@@ -191,7 +210,17 @@ def test_audio_config_from_env_thresholds(monkeypatch):
     monkeypatch.setenv("VOCABZERO_DTW_THRESHOLD_36", "2.5")
     monkeypatch.setenv("VOCABZERO_DTW_THRESHOLD_12", "1.7")
     monkeypatch.setenv("VOCABZERO_MIN_CONFIDENCE", "0.75")
+    monkeypatch.setenv("VOCABZERO_AMBIGUITY_MARGIN_RATIO", "0.2")
+    monkeypatch.setenv("VOCABZERO_AMBIGUITY_CONFIDENCE_FLOOR", "0.5")
+    monkeypatch.setenv("VOCABZERO_DTW_BAND_RATIO", "0.3")
+    monkeypatch.setenv("VOCABZERO_MAX_LENGTH_RATIO", "3.0")
+    monkeypatch.setenv("VOCABZERO_TEMPLATE_AGG_K", "4")
     cfg = AudioConfig.from_env()
     assert cfg.dtw_threshold_36 == 2.5
     assert cfg.dtw_threshold_12 == 1.7
     assert cfg.min_confidence_gate == 0.75
+    assert cfg.ambiguity_margin_ratio == 0.2
+    assert cfg.ambiguity_confidence_floor == 0.5
+    assert cfg.dtw_band_ratio == 0.3
+    assert cfg.max_length_ratio == 3.0
+    assert cfg.template_agg_k == 4
