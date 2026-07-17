@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from vocab_zero.core.models import AudioConfig
 from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc, subsequence_dtw
@@ -130,6 +131,14 @@ def test_dtw_distance_banded_radius_clamps_to_length_difference():
     short = [[0.1] * 12 for _ in range(2)]
     long = [[0.1] * 12 for _ in range(10)]
     assert dtw_distance(short, long, band_radius=0) < float("inf")
+
+
+def test_dtw_distance_banded_is_symmetric_for_unequal_lengths():
+    first = [[0.1 * i] * 12 for i in range(4)]
+    second = [[0.2 * i] * 12 for i in range(7)]
+    assert dtw_distance(first, second, band_radius=2) == pytest.approx(
+        dtw_distance(second, first, band_radius=2)
+    )
 
 
 def test_dtw_distance_empty():

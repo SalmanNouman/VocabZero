@@ -771,3 +771,35 @@ def test_rerank_well_separated_pair_keeps_acoustic_confidence(
     entry, conf = engine.rerank_acoustic_candidates([(entry1, 4.0), (entry2, 7.0)])
     assert entry == entry1
     assert conf == pytest.approx(0.6)
+
+
+def test_rerank_ngram_winner_uses_its_own_margin(
+    temp_dictionary, mock_vector_store, mock_llm_client, config
+):
+    audio_cfg = AudioConfig(
+        use_deltas=False,
+        dtw_threshold_12=10.0,
+        min_confidence_gate=0.2,
+        ambiguity_margin_ratio=0.15,
+        ambiguity_confidence_floor=0.4,
+    )
+    engine = TranslationEngine(
+        dictionary=temp_dictionary,
+        vector_store=mock_vector_store,
+        llm_client=None,
+        config=config,
+        audio_config=audio_cfg,
+    )
+    acoustic_entry = LexiconEntry(source_term="acoustic", target_term="acoustic", confidence=1.0)
+    ngram_entry = LexiconEntry(source_term="ngram", target_term="ngram", confidence=1.0)
+    engine.dictionary.ngram_model.get_transition_probability = Mock(
+        side_effect=lambda _previous, current: 1.0 if current == "ngram" else 0.0
+    )
+
+    entry, conf = engine.rerank_acoustic_candidates(
+        [(acoustic_entry, 4.0), (ngram_entry, 7.5)],
+        context="previous",
+    )
+
+    assert entry is None
+    assert conf == 0.0

@@ -295,7 +295,7 @@ def dtw_distance(
 
     for i in range(m):
         for j in range(n):
-            if band_radius is not None and abs(i - j * m / n) > band_radius:
+            if band_radius is not None and abs(i - j) > band_radius:
                 continue
             distance = frame_dist(s1[i], s2[j])
             if i == 0 and j == 0:

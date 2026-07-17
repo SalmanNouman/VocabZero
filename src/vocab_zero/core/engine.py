@@ -406,7 +406,12 @@ class TranslationEngine:
         if llm_selected is not None and best_ranked_entry.source_term == llm_selected.source_term:
             final_conf = 0.7 * winner_acoustic_conf + 0.3 * llm_conf
         else:
-            margin = max(0.0, (second_dist - best_dist) / dtw_threshold)
+            nearest_other_dist = min(
+                dist
+                for entry, dist in candidates
+                if entry is not best_ranked_entry
+            )
+            margin = max(0.0, (nearest_other_dist - winner_dist) / dtw_threshold)
             blend = self.audio_config.ambiguity_confidence_floor + (
                 1.0 - self.audio_config.ambiguity_confidence_floor
             ) * min(1.0, margin / self.audio_config.ambiguity_margin_ratio)
