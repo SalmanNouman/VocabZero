@@ -55,6 +55,13 @@ The server reads these environment variables at startup:
 - `OPENAI_BASE_URL`: base URL for OpenAI-compatible API
 - `LLM_PROVIDER`: LLM provider to use (`openai`, `none`)
 - `VOCABZERO_CMVN` / `VOCABZERO_VTLN` / `VOCABZERO_LIFTERING` / `VOCABZERO_DELTAS`: audio normalization toggles (accept `1`/`true`/`yes`/`on`; all default on)
+- `VOCABZERO_DTW_THRESHOLD_36` / `VOCABZERO_DTW_THRESHOLD_12`: normalized DTW thresholds (defaults `1.8` / `1.2`)
+- `VOCABZERO_MIN_CONFIDENCE`: minimum accepted acoustic confidence (default `0.6`)
+- `VOCABZERO_AMBIGUITY_MARGIN_RATIO`: normalized distance margin used to identify ambiguity and restore full confidence when exceeded (default `0.15`)
+- `VOCABZERO_AMBIGUITY_CONFIDENCE_FLOOR`: confidence multiplier floor for ambiguous acoustic-only matches (default `0.4`)
+- `VOCABZERO_DTW_BAND_RATIO`: Sakoe-Chiba DTW band width as a fraction of the longer sequence (default `0.2`)
+- `VOCABZERO_MAX_LENGTH_RATIO`: maximum template/query frame-length ratio (default `2.5`)
+- `VOCABZERO_TEMPLATE_AGG_K`: number of nearest valid templates averaged per lexicon entry (default `3`)
 
 ### REST API Endpoints
 
@@ -112,7 +119,7 @@ Remove a lexicon entry by its source term.
 
 #### `GET /api/audio_config`
 
-Returns the current audio processing configuration including DTW thresholds, confidence gate, and normalization flags.
+Returns the current audio processing configuration including DTW thresholds, confidence controls, template matching safeguards, and normalization flags.
 
 ```json
 {
@@ -121,6 +128,11 @@ Returns the current audio processing configuration including DTW thresholds, con
   "dtw_threshold_12": 1.2,
   "dtw_threshold": 1.8,
   "min_confidence_gate": 0.6,
+  "ambiguity_margin_ratio": 0.15,
+  "ambiguity_confidence_floor": 0.4,
+  "dtw_band_ratio": 0.2,
+  "max_length_ratio": 2.5,
+  "template_agg_k": 3,
   "use_deltas": true,
   "use_cmvn": true,
   "use_vtln": true,

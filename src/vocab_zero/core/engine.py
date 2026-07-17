@@ -338,7 +338,7 @@ class TranslationEngine:
 
 
         # Phonetic ambiguity threshold (proportional to DTW threshold)
-        dtw_diff_threshold = dtw_threshold * 0.15
+        dtw_diff_threshold = dtw_threshold * self.audio_config.ambiguity_margin_ratio
         ambiguous = (second_dist - best_dist) < dtw_diff_threshold
 
         # 1. Apply N-gram language model
@@ -406,7 +406,19 @@ class TranslationEngine:
         if llm_selected is not None and best_ranked_entry.source_term == llm_selected.source_term:
             final_conf = 0.7 * winner_acoustic_conf + 0.3 * llm_conf
         else:
-            final_conf = winner_acoustic_conf
+            nearest_other_dist = min(
+                (
+                    dist
+                    for entry, dist in candidates
+                    if entry.source_term != best_ranked_entry.source_term
+                ),
+                default=float("inf"),
+            )
+            margin = max(0.0, (nearest_other_dist - winner_dist) / dtw_threshold)
+            blend = self.audio_config.ambiguity_confidence_floor + (
+                1.0 - self.audio_config.ambiguity_confidence_floor
+            ) * min(1.0, margin / self.audio_config.ambiguity_margin_ratio)
+            final_conf = winner_acoustic_conf * blend
 
         if final_conf < self.audio_config.min_confidence_gate:
             return None, 0.0
