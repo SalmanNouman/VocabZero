@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from dotenv import load_dotenv
+from dotenv import dotenv_values
 
 from vocab_zero.core.models import AudioConfig
 from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc, subsequence_dtw
@@ -242,10 +242,9 @@ def test_audio_config_reads_dotenv_file(tmp_path, monkeypatch):
         "VOCABZERO_DTW_THRESHOLD_36=2.7\nVOCABZERO_TEMPLATE_AGG_K=5\n",
         encoding="utf-8",
     )
-    monkeypatch.delenv("VOCABZERO_DTW_THRESHOLD_36", raising=False)
-    monkeypatch.delenv("VOCABZERO_TEMPLATE_AGG_K", raising=False)
-
-    assert load_dotenv(env_path, override=False)
+    for key, value in dotenv_values(env_path).items():
+        if value is not None:
+            monkeypatch.setenv(key, value)
     cfg = AudioConfig.from_env()
 
     assert cfg.dtw_threshold_36 == 2.7
