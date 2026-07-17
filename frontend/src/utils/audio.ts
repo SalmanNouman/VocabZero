@@ -101,8 +101,10 @@ export function vadSegmentSamples(
   return words;
 }
 
-const SILERO_MODEL_URL = "/vad-silero_vad_legacy.onnx";
-const SILERO_WASM_PATH = "/";
+const SILERO_MODEL_URL =
+  "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.30/dist/silero_vad_legacy.onnx";
+const SILERO_WASM_PATH =
+  "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.27.0/dist/";
 const SILERO_MIN_SPEECH_MS = 150;
 const SILERO_REDEMPTION_MS = 240;
 let sileroVadPromise: Promise<NonRealTimeVAD> | null = null;
