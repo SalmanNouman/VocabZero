@@ -15,14 +15,14 @@ import type { LexiconEntry } from "./types";
 import {
   SAMPLE_RATE,
   extractFrequenciesForSegment,
-  vadSegmentSamples,
+  vadSegmentSamplesSilero,
 } from "./utils/audio";
 
 export default function App() {
   // App mode & audio states
   const [isRecording, setIsRecording] = useState(false);
   const [peaksPerFrame, setPeaksPerFrame] = useState(2);
-  const [gateThreshold, setGateThreshold] = useState(0.01);
+  const [gateThreshold, setGateThreshold] = useState(0.5);
   const [wordsDetected, setWordsDetected] = useState(0);
   const [dtwThreshold36, setDtwThreshold36] = useState<number | null>(null);
   const [dtwThreshold12, setDtwThreshold12] = useState<number | null>(null);
@@ -95,7 +95,7 @@ export default function App() {
           result.data.dtw_threshold_36 || result.data.dtw_threshold,
         );
         setDtwThreshold12(result.data.dtw_threshold_12);
-        setGateThreshold(result.data.min_confidence_gate || 0.01);
+        setGateThreshold(result.data.min_confidence_gate || 0.5);
       }
     } catch (err) {
       console.error("Failed to fetch audio config:", err);
@@ -217,10 +217,10 @@ export default function App() {
     }
 
     // Segment audio using local VAD
-    const segments = vadSegmentSamples(samples, gateThreshold);
+    const segments = await vadSegmentSamplesSilero(samples, gateThreshold);
     if (segments.length === 0) {
       showToast(
-        "No word segments detected. Speak louder or reduce Gate Threshold.",
+        "No word segments detected. Speak louder or reduce Speech Probability.",
       );
       return;
     }

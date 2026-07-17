@@ -1,3 +1,5 @@
+import { NonRealTimeVAD } from "@ricky0123/vad-web";
+
 export const SAMPLE_RATE = 16000;
 export const PROBE_FREQS = [
   200, 250, 300, 350, 400, 450, 500, 550, 600, 660, 730, 800, 880, 970,
@@ -99,3 +101,86 @@ export function vadSegmentSamples(
   return words;
 }
 
+const SILERO_MODEL_URL = "/vad-silero_vad_legacy.onnx";
+const SILERO_WASM_PATH = "/";
+const SILERO_MIN_SPEECH_MS = 150;
+const SILERO_REDEMPTION_MS = 240;
+let sileroVadPromise: Promise<NonRealTimeVAD> | null = null;
+let sileroVadThreshold: number | null = null;
+
+function getSileroVAD(positiveSpeechThreshold: number): Promise<NonRealTimeVAD> {
+  if (!sileroVadPromise || sileroVadThreshold !== positiveSpeechThreshold) {
+    const negativeSpeechThreshold = Math.max(0.05, positiveSpeechThreshold - 0.15);
+    sileroVadThreshold = positiveSpeechThreshold;
+    sileroVadPromise = NonRealTimeVAD.new({
+      modelURL: SILERO_MODEL_URL,
+      positiveSpeechThreshold,
+      negativeSpeechThreshold,
+      redemptionMs: SILERO_REDEMPTION_MS,
+      preSpeechPadMs: 0,
+      minSpeechMs: SILERO_MIN_SPEECH_MS,
+      submitUserSpeechOnPause: true,
+      ortConfig: (ort) => {
+        ort.env.wasm.wasmPaths = SILERO_WASM_PATH;
+      },
+    });
+  }
+  return sileroVadPromise;
+}
+
+export async function vadSegmentSamplesSilero(
+  samples: Float32Array | number[],
+  positiveSpeechThreshold: number,
+  minWordSamples = 2400,
+  fallbackSilenceThreshold = 0.01,
+  collapseSegments = false,
+): Promise<Float32Array[]> {
+  const floatSamples = samples instanceof Float32Array ? samples : new Float32Array(samples);
+
+  try {
+    const vad = await getSileroVAD(positiveSpeechThreshold);
+    const segments: Float32Array[] = [];
+    let firstSpeechStart: number | null = null;
+    let lastSpeechEnd: number | null = null;
+    for await (const speech of vad.run(floatSamples, SAMPLE_RATE)) {
+      if (speech.audio.length >= minWordSamples) {
+        segments.push(speech.audio);
+        firstSpeechStart ??= speech.start;
+        lastSpeechEnd = speech.end;
+      }
+    }
+    if (collapseSegments && segments.length > 1 && firstSpeechStart !== null && lastSpeechEnd !== null) {
+      const start = Math.max(0, Math.floor((firstSpeechStart * SAMPLE_RATE) / 1000));
+      const end = Math.min(floatSamples.length, Math.ceil((lastSpeechEnd * SAMPLE_RATE) / 1000));
+      if (end - start >= minWordSamples) {
+        return [floatSamples.slice(start, end)];
+      }
+    }
+    return segments;
+  } catch (error) {
+    console.warn("Silero VAD unavailable; falling back to energy-gate segmentation.", error);
+    sileroVadPromise = null;
+    sileroVadThreshold = null;
+    const fallbackSegments = vadSegmentSamples(
+      floatSamples,
+      fallbackSilenceThreshold,
+      320,
+      12,
+      minWordSamples,
+    );
+    return collapseSegments ? mergeSpeechSegments(fallbackSegments) : fallbackSegments;
+  }
+}
+
+export function mergeSpeechSegments(segments: Float32Array[]): Float32Array[] {
+  if (segments.length <= 1) return segments;
+
+  const totalLength = segments.reduce((total, segment) => total + segment.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const segment of segments) {
+    merged.set(segment, offset);
+    offset += segment.length;
+  }
+  return [merged];
+}

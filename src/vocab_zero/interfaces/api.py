@@ -10,6 +10,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dotenv import find_dotenv, load_dotenv
 import numpy as np
 import uvicorn
 
@@ -23,6 +24,8 @@ from vocab_zero.core.engine import TranslationEngine
 from vocab_zero.core.engine_factory import build_engine
 from vocab_zero.core.models import AudioConfig, TranslationResult
 from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc
+
+load_dotenv(find_dotenv())
 
 STATIC_DIR = Path(__file__).parent / "static"
 INDEX_HTML = STATIC_DIR / "index.html"

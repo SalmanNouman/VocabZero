@@ -36,7 +36,7 @@ export const AcousticControlPanel: React.FC<AcousticControlPanelProps> = ({
           Control Panel
         </h3>
         <p className="text-xs text-muted-foreground mt-1">
-          Configure audio threshold and speak phrases
+          Configure speech probability and speak phrases
         </p>
       </div>
 
@@ -84,7 +84,7 @@ export const AcousticControlPanel: React.FC<AcousticControlPanelProps> = ({
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-medium text-muted-foreground flex items-center justify-between">
             <span className="flex items-center gap-1">
-              <Volume2 className="h-3 w-3" /> Gate Threshold
+              <Volume2 className="h-3 w-3" /> Speech Probability
             </span>
             <span className="font-mono text-accent-foreground font-bold">
               {gateThreshold.toFixed(3)}
@@ -93,9 +93,9 @@ export const AcousticControlPanel: React.FC<AcousticControlPanelProps> = ({
           <div className="flex items-center min-h-[34px]">
             <input
               type="range"
-              min={0.002}
-              max={0.05}
-              step={0.001}
+              min={0.1}
+              max={0.9}
+              step={0.05}
               value={gateThreshold}
               onChange={(e) => onGateThresholdChange(Number(e.target.value))}
               className="w-full h-1.5 bg-secondary rounded-lg appearance-none cursor-pointer accent-accent"
