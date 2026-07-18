@@ -5,7 +5,7 @@ import pytest
 from dotenv import dotenv_values
 
 from vocab_zero.core.models import AudioConfig
-from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc, subsequence_dtw
+from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc, subsequence_dtw, extract_whisper_embedding
 
 
 def test_extract_mfcc_empty():
@@ -249,3 +249,17 @@ def test_audio_config_reads_dotenv_file(tmp_path, monkeypatch):
 
     assert cfg.dtw_threshold_36 == 2.7
     assert cfg.template_agg_k == 5
+
+
+def test_extract_whisper_embedding():
+    # Test extract_whisper_embedding on empty signal
+    assert extract_whisper_embedding([]) == []
+    
+    # Test extract_whisper_embedding on a short signal
+    signal = np.sin(2 * np.pi * 440 * np.linspace(0, 0.5, 8000, endpoint=False))
+    embedding = extract_whisper_embedding(signal)
+    
+    assert isinstance(embedding, list)
+    assert len(embedding) == 384
+    assert all(isinstance(val, float) for val in embedding)
+

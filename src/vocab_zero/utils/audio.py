@@ -455,3 +455,57 @@ def k_medoids(
             break
 
     return [templates[i] for i in best_medoids]
+
+
+_whisper_model = None
+_whisper_processor = None
+
+
+def extract_whisper_embedding(signal: list[float] | np.ndarray) -> list[float]:
+    """Extract a 384-dimensional Whisper-tiny encoder embedding from raw audio.
+
+    Args:
+        signal: 1D NumPy array or list of raw audio samples (float).
+
+    Returns:
+        A list of 384 floats representing the mean-pooled encoder output.
+    """
+    global _whisper_model, _whisper_processor
+
+    if len(signal) == 0:
+        return []
+
+    import torch
+    from transformers import WhisperModel, WhisperProcessor
+
+    if _whisper_model is None or _whisper_processor is None:
+        import logging
+        logging.getLogger("transformers").setLevel(logging.ERROR)
+        try:
+            _whisper_processor = WhisperProcessor.from_pretrained("openai/whisper-tiny", local_files_only=True)
+            _whisper_model = WhisperModel.from_pretrained("openai/whisper-tiny", local_files_only=True)
+        except OSError:
+            _whisper_processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
+            _whisper_model = WhisperModel.from_pretrained("openai/whisper-tiny")
+        _whisper_model.eval()
+
+    sig = np.array(signal, dtype=np.float32) if not isinstance(signal, np.ndarray) else signal.astype(np.float32)
+
+    # Whisper expects 16kHz audio
+    inputs = _whisper_processor(sig, sampling_rate=16000, return_tensors="pt")
+    input_features = inputs.input_features
+
+    import torch._dynamo
+
+    active_len = max(1, min(1500, int(np.ceil((len(sig) / 16000.0) * 50.0))))
+
+    def _forward():
+        with torch.no_grad():
+            encoder_outputs = _whisper_model.encoder(input_features)
+            last_hidden_state = encoder_outputs.last_hidden_state  # Shape: (1, 1500, 384)
+            mean_pooled = torch.mean(last_hidden_state[:, :active_len, :], dim=1)  # Shape: (1, 384)
+            return mean_pooled[0].tolist()
+
+    return torch._dynamo.disable(_forward)()
+
+
