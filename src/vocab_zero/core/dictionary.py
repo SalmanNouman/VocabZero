@@ -106,7 +106,6 @@ class DictionaryManager:
             self.vector_store.add_entry(entry)
             for example in entry.context_examples:
                 self.ngram_model.train_on_sentence(example)
-            self.save()
             return True
 
     def upsert(self, entry: LexiconEntry) -> LexiconEntry:
@@ -117,7 +116,6 @@ class DictionaryManager:
             for stored in self._entries.values():
                 for example in stored.context_examples:
                     self.ngram_model.train_on_sentence(example)
-            self.save()
             return entry
 
     def update_confidence(self, source_term: str, delta: float) -> LexiconEntry | None:
@@ -129,7 +127,6 @@ class DictionaryManager:
             updated = entry.model_copy(update={"confidence": confidence})
             self._entries[source_term] = updated
             self.vector_store.add_entry(updated)
-            self.save()
             return updated
 
     def delete(self, source_term: str) -> bool:
@@ -138,7 +135,6 @@ class DictionaryManager:
                 return False
             del self._entries[source_term]
             self.vector_store.delete(source_term)
-            self.save()
             return True
 
     def has(self, source_term: str) -> bool:
