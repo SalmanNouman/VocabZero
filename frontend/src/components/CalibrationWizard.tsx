@@ -2,7 +2,10 @@ import React, { useState, useEffect, useRef } from "react";
 
 import { X, Mic, RefreshCw, CheckCircle, ChevronRight } from "lucide-react";
 
-import { SAMPLE_RATE, vadSegmentSamples } from "../utils/audio";
+import {
+  SAMPLE_RATE,
+  vadSegmentSamplesSilero,
+} from "../utils/audio";
 
 interface CalibrationWizardProps {
   isOpen: boolean;
@@ -250,17 +253,12 @@ export const CalibrationWizard: React.FC<CalibrationWizardProps> = ({
 
     // Segment using VAD
 
-    const segments = vadSegmentSamples(samples, gateThreshold);
+    const segments = await vadSegmentSamplesSilero(samples, gateThreshold, 2400, 0.01, true);
 
     if (segments.length === 0) {
       setStatusMsg(
-        "No speech detected. Speak louder or reduce Gate Threshold.",
+        "No speech detected. Speak louder or reduce Speech Probability.",
       );
-      return;
-    }
-
-    if (segments.length !== 1) {
-      setStatusMsg("Please speak only one word per recording. Try again.");
       return;
     }
 
