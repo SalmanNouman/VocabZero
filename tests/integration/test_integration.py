@@ -112,7 +112,7 @@ def test_integration_flow(temp_env):
         # Check dictionary manager directly to verify templates are saved
         entry = client.app.state.engine.dictionary.lookup(acoustic_source)
         assert entry is not None
-        assert len(entry.mfcc_templates) == 1
+        assert len(entry.embeddings) == 1
         
         # 7. Test successful translation using the trained audio signal
         response = client.post(

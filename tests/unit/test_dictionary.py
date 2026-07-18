@@ -196,3 +196,32 @@ def test_custom_serializer_roundtrip(tmp_path: Path) -> None:
     loaded = DictionaryManager(path, serializer=serializer)
 
     assert loaded.lookup("hello") == entry
+
+
+def test_load_synchronizes_vector_index(tmp_path: Path) -> None:
+    path = tmp_path / "lexicon.json"
+    vector = [1.0] + [0.0] * 383
+    entry = make_entry(source_term="hi", target_term="hola")
+    entry.embeddings = [vector]
+
+    manager = DictionaryManager(path)
+    manager.insert(entry)
+    manager.save()
+
+    # A fresh manager reads the JSON and must rebuild the vector index so the
+    # stored embedding is retrievable via similarity search.
+    reloaded = DictionaryManager(path)
+    results = reloaded.vector_store.search_by_vector(vector, k=1)
+    assert len(results) == 1
+    assert results[0].entry.source_term == "hi"
+
+
+def test_prune_templates_reduces_embeddings(tmp_path: Path) -> None:
+    manager = DictionaryManager(tmp_path / "lexicon.json")
+    entry = make_entry(source_term="hi", target_term="hola")
+    entry.embeddings = [[float(i)] + [0.0] * 383 for i in range(8)]
+    manager.upsert(entry)
+
+    manager.prune_templates(max_templates=5)
+
+    assert len(manager.lookup("hi").embeddings) == 5

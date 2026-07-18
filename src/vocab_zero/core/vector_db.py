@@ -41,46 +41,39 @@ class VectorStoreClient:
             embedding_function=self._embedding_function,
         )
 
+    def _entry_metadata(self, entry: LexiconEntry, embedding_idx: str) -> dict[str, str]:
+        return {
+            "source_term": entry.source_term,
+            "target_term": entry.target_term,
+            "confidence": str(entry.confidence),
+            "context_examples_json": json.dumps(entry.context_examples, ensure_ascii=False),
+            "embedding_idx": embedding_idx,
+        }
+
     def add_entry(self, entry: LexiconEntry) -> bool:
         try:
             document_text = self._build_document_text(entry)
-            
-            # Delete any existing entries for this source_term first to avoid duplicates
+
+            # Replace any existing rows for this source_term to avoid stale duplicates.
             self.delete(entry.source_term)
-            
-            if entry.mfcc_templates:
-                for idx, template in enumerate(entry.mfcc_templates):
-                    if not template or not template[0]:
-                        continue
-                    vector = template[0]
-                    metadata = {
-                        "source_term": entry.source_term,
-                        "target_term": entry.target_term,
-                        "confidence": str(entry.confidence),
-                        "context_examples_json": json.dumps(entry.context_examples, ensure_ascii=False),
-                        "template_idx": str(idx),
-                    }
+
+            valid_embeddings = [vec for vec in entry.embeddings if vec]
+            if valid_embeddings:
+                for idx, vector in enumerate(valid_embeddings):
                     self._collection.upsert(
                         ids=[f"{entry.source_term}_t{idx}"],
                         embeddings=[vector],
                         documents=[document_text],
-                        metadatas=[metadata],
+                        metadatas=[self._entry_metadata(entry, str(idx))],
                     )
             else:
-                metadata = {
-                    "source_term": entry.source_term,
-                    "target_term": entry.target_term,
-                    "confidence": str(entry.confidence),
-                    "context_examples_json": json.dumps(entry.context_examples, ensure_ascii=False),
-                    "template_idx": "none",
-                }
                 self._collection.upsert(
                     ids=[entry.source_term],
                     documents=[document_text],
-                    metadatas=[metadata],
+                    metadatas=[self._entry_metadata(entry, "none")],
                 )
             return True
-        except Exception:
+        except (ValueError, TypeError, chromadb.errors.ChromaError):
             return False
 
     def search(self, query: str, k: int = 5) -> list[SearchResult]:
@@ -117,7 +110,7 @@ class VectorStoreClient:
                 search_results.append(SearchResult(entry=entry, score=score))
             
             return search_results
-        except Exception:
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError, chromadb.errors.ChromaError):
             return []
 
     def search_by_vector(self, query_vector: list[float], k: int = 5) -> list[SearchResult]:
@@ -154,7 +147,7 @@ class VectorStoreClient:
                 search_results.append(SearchResult(entry=entry, score=score))
             
             return search_results
-        except Exception:
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError, chromadb.errors.ChromaError):
             return []
 
     def delete(self, source_term: str) -> bool:
@@ -175,7 +168,7 @@ class VectorStoreClient:
                 return True
                 
             return False
-        except Exception:
+        except (ValueError, TypeError, chromadb.errors.ChromaError):
             return False
 
     def clear(self) -> bool:
@@ -184,7 +177,7 @@ class VectorStoreClient:
             if existing and existing["ids"]:
                 self._collection.delete(ids=existing["ids"])
             return True
-        except Exception:
+        except (ValueError, TypeError, chromadb.errors.ChromaError):
             return False
 
     def _build_document_text(self, entry: LexiconEntry) -> str:
@@ -214,5 +207,5 @@ class VectorStoreClient:
                 confidence=confidence,
                 context_examples=context_examples,
             )
-        except Exception:
+        except (ValueError, TypeError, json.JSONDecodeError):
             return None

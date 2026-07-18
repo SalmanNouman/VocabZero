@@ -18,7 +18,8 @@ class LexiconEntry(BaseModel):
     target_term: str
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     context_examples: list[str] = Field(default_factory=list)
-    mfcc_templates: list[list[list[float]]] = Field(default_factory=list)
+    # One Whisper-tiny encoder embedding (384 floats) per taught recording.
+    embeddings: list[list[float]] = Field(default_factory=list)
 
 
 class NGramModel:
@@ -179,11 +180,14 @@ class DictionaryManager:
 
     def prune_templates(self, max_templates: int = 5) -> None:
         with self._lock:
-            for entry in list(self._entries.values()):
-                if len(entry.mfcc_templates) > max_templates:
-                    pruned = k_medoids(entry.mfcc_templates, max_templates)
-                    entry.mfcc_templates = pruned
-                    self.upsert(entry)
+            changed = False
+            for entry in self._entries.values():
+                if len(entry.embeddings) > max_templates:
+                    entry.embeddings = k_medoids(entry.embeddings, max_templates)
+                    self.vector_store.add_entry(entry)
+                    changed = True
+            if changed:
+                self.save()
 
     def _dump_entries(self) -> JsonObject:
         return {

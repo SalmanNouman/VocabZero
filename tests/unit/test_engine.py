@@ -63,7 +63,7 @@ def engine(
         vector_store=mock_vector_store,
         llm_client=mock_llm_client,
         config=config,
-        audio_config=AudioConfig(use_deltas=False, dtw_threshold_12=15.0, min_confidence_gate=0.0),
+        audio_config=AudioConfig(match_distance_threshold=15.0, min_confidence_gate=0.0),
     )
 
 
@@ -588,8 +588,7 @@ def test_rerank_acoustic_candidates(engine):
     assert entry is None
     assert conf == 0.0
 
-    t1 = [[0.1] * 12 for _ in range(5)]
-    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0, mfcc_templates=[t1])
+    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0)
 
     entry, conf = engine.rerank_acoustic_candidates([(entry1, 5.0)])
     assert entry == entry1
@@ -599,7 +598,7 @@ def test_rerank_acoustic_candidates(engine):
     assert entry is None
     assert conf == 0.0
 
-    entry2 = LexiconEntry(source_term="term2", target_term="target2", confidence=1.0, mfcc_templates=[t1])
+    entry2 = LexiconEntry(source_term="term2", target_term="target2", confidence=1.0)
     entry, conf = engine.rerank_acoustic_candidates([(entry1, 4.0), (entry2, 10.0)])
     assert entry == entry1
     assert conf == pytest.approx(0.73, abs=0.01)
@@ -612,7 +611,7 @@ def test_rerank_acoustic_candidates(engine):
 
 def test_rerank_threshold_comes_from_audio_config(temp_dictionary, mock_vector_store, mock_llm_client, config):
     # 36-dim config with a high threshold should accept a candidate that the 12-dim fallback would reject
-    audio_cfg = AudioConfig(use_deltas=True, dtw_threshold_36=100.0)
+    audio_cfg = AudioConfig(match_distance_threshold=100.0)
     engine = TranslationEngine(
         dictionary=temp_dictionary,
         vector_store=mock_vector_store,
@@ -620,8 +619,7 @@ def test_rerank_threshold_comes_from_audio_config(temp_dictionary, mock_vector_s
         config=config,
         audio_config=audio_cfg,
     )
-    t1 = [[0.1] * 12 for _ in range(5)]
-    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0, mfcc_templates=[t1])
+    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0)
     # dist=20.0 would be rejected under threshold=15.0 but accepted under threshold=100.0
     entry, conf = engine.rerank_acoustic_candidates([(entry1, 20.0)])
     assert entry == entry1
@@ -630,7 +628,7 @@ def test_rerank_threshold_comes_from_audio_config(temp_dictionary, mock_vector_s
 
 def test_rerank_single_candidate_no_margin_rejection(temp_dictionary, mock_vector_store, mock_llm_client, config):
     """Single candidate with dist < threshold should be accepted, even if dist > 70% of threshold."""
-    audio_cfg = AudioConfig(use_deltas=False, dtw_threshold_12=10.0, min_confidence_gate=0.0)
+    audio_cfg = AudioConfig(match_distance_threshold=10.0, min_confidence_gate=0.0)
     engine = TranslationEngine(
         dictionary=temp_dictionary,
         vector_store=mock_vector_store,
@@ -638,8 +636,7 @@ def test_rerank_single_candidate_no_margin_rejection(temp_dictionary, mock_vecto
         config=config,
         audio_config=audio_cfg,
     )
-    t1 = [[0.1] * 12 for _ in range(5)]
-    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0, mfcc_templates=[t1])
+    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0)
 
     # dist=8.0 is 80% of threshold 10.0 → accepted and confidence is 0.2
     entry, conf = engine.rerank_acoustic_candidates([(entry1, 8.0)])
@@ -655,7 +652,7 @@ def test_rerank_single_candidate_no_margin_rejection(temp_dictionary, mock_vecto
 
 def test_rerank_confidence_has_no_floor(temp_dictionary, mock_vector_store, mock_llm_client, config):
     """Confidence should go below 0.5 for high-distance matches (no floor)."""
-    audio_cfg = AudioConfig(use_deltas=False, dtw_threshold_12=10.0, min_confidence_gate=0.0)
+    audio_cfg = AudioConfig(match_distance_threshold=10.0, min_confidence_gate=0.0)
     engine = TranslationEngine(
         dictionary=temp_dictionary,
         vector_store=mock_vector_store,
@@ -663,8 +660,7 @@ def test_rerank_confidence_has_no_floor(temp_dictionary, mock_vector_store, mock
         config=config,
         audio_config=audio_cfg,
     )
-    t1 = [[0.1] * 12 for _ in range(5)]
-    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0, mfcc_templates=[t1])
+    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0)
 
     # dist=6.5 → conf = 1.0 - 6.5/10.0 = 0.35, which is below old floor of 0.5
     entry, conf = engine.rerank_acoustic_candidates([(entry1, 6.5)])
@@ -675,7 +671,7 @@ def test_rerank_confidence_has_no_floor(temp_dictionary, mock_vector_store, mock
 
 def test_rerank_min_confidence_gate_rejects_single_candidate(temp_dictionary, mock_vector_store, mock_llm_client, config):
     """Single candidate with confidence below min_confidence_gate is rejected."""
-    audio_cfg = AudioConfig(use_deltas=False, dtw_threshold_12=10.0, min_confidence_gate=0.5)
+    audio_cfg = AudioConfig(match_distance_threshold=10.0, min_confidence_gate=0.5)
     engine = TranslationEngine(
         dictionary=temp_dictionary,
         vector_store=mock_vector_store,
@@ -683,8 +679,7 @@ def test_rerank_min_confidence_gate_rejects_single_candidate(temp_dictionary, mo
         config=config,
         audio_config=audio_cfg,
     )
-    t1 = [[0.1] * 12 for _ in range(5)]
-    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0, mfcc_templates=[t1])
+    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0)
 
     # dist=8.0 → conf = 0.2, below gate 0.5 → rejected
     entry, conf = engine.rerank_acoustic_candidates([(entry1, 8.0)])
@@ -699,7 +694,7 @@ def test_rerank_min_confidence_gate_rejects_single_candidate(temp_dictionary, mo
 
 def test_rerank_min_confidence_gate_rejects_reranked_result(temp_dictionary, mock_vector_store, mock_llm_client, config):
     """Reranked result with final confidence below min_confidence_gate is rejected."""
-    audio_cfg = AudioConfig(use_deltas=False, dtw_threshold_12=10.0, min_confidence_gate=0.5)
+    audio_cfg = AudioConfig(match_distance_threshold=10.0, min_confidence_gate=0.5)
     engine = TranslationEngine(
         dictionary=temp_dictionary,
         vector_store=mock_vector_store,
@@ -707,9 +702,8 @@ def test_rerank_min_confidence_gate_rejects_reranked_result(temp_dictionary, moc
         config=config,
         audio_config=audio_cfg,
     )
-    t1 = [[0.1] * 12 for _ in range(5)]
-    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0, mfcc_templates=[t1])
-    entry2 = LexiconEntry(source_term="term2", target_term="target2", confidence=1.0, mfcc_templates=[t1])
+    entry1 = LexiconEntry(source_term="term1", target_term="target1", confidence=1.0)
+    entry2 = LexiconEntry(source_term="term2", target_term="target2", confidence=1.0)
 
     # Both candidates have high DTW dist → low acoustic conf, no LLM → below gate
     # dist=8.0 → acoustic conf = 0.2; dist=9.0 → 0.1. Winner is entry1 (0.2) < gate 0.5 → rejected
@@ -727,8 +721,7 @@ def test_rerank_ambiguous_acoustic_pair_is_damped(
     temp_dictionary, mock_vector_store, mock_llm_client, config
 ):
     audio_cfg = AudioConfig(
-        use_deltas=False,
-        dtw_threshold_12=10.0,
+        match_distance_threshold=10.0,
         min_confidence_gate=0.5,
         ambiguity_margin_ratio=0.15,
         ambiguity_confidence_floor=0.4,
@@ -748,12 +741,39 @@ def test_rerank_ambiguous_acoustic_pair_is_damped(
     assert conf == 0.0
 
 
+def test_rerank_same_target_templates_do_not_penalize_each_other(
+    temp_dictionary, mock_vector_store, mock_llm_client, config
+):
+    """Two templates for the SAME translated word reinforce rather than compete."""
+    audio_cfg = AudioConfig(
+        match_distance_threshold=10.0,
+        min_confidence_gate=0.5,
+        ambiguity_margin_ratio=0.15,
+        ambiguity_confidence_floor=0.4,
+    )
+    engine = TranslationEngine(
+        dictionary=temp_dictionary,
+        vector_store=mock_vector_store,
+        llm_client=None,
+        config=config,
+        audio_config=audio_cfg,
+    )
+    template_a = LexiconEntry(source_term="hi_1", target_term="hola", confidence=1.0)
+    template_b = LexiconEntry(source_term="hi_2", target_term="hola", confidence=1.0)
+
+    # Close distances would look "ambiguous" if compared by source_term, but
+    # since both map to the same target they should not damp confidence.
+    entry, conf = engine.rerank_acoustic_candidates([(template_a, 2.0), (template_b, 2.5)])
+    assert entry is not None
+    assert entry.target_term == "hola"
+    assert conf == pytest.approx(0.8, abs=0.01)
+
+
 def test_rerank_well_separated_pair_keeps_acoustic_confidence(
     temp_dictionary, mock_vector_store, mock_llm_client, config
 ):
     audio_cfg = AudioConfig(
-        use_deltas=False,
-        dtw_threshold_12=10.0,
+        match_distance_threshold=10.0,
         min_confidence_gate=0.5,
         ambiguity_margin_ratio=0.15,
         ambiguity_confidence_floor=0.4,
@@ -777,8 +797,7 @@ def test_rerank_ngram_winner_uses_its_own_margin(
     temp_dictionary, mock_vector_store, mock_llm_client, config
 ):
     audio_cfg = AudioConfig(
-        use_deltas=False,
-        dtw_threshold_12=10.0,
+        match_distance_threshold=10.0,
         min_confidence_gate=0.2,
         ambiguity_margin_ratio=0.15,
         ambiguity_confidence_floor=0.4,

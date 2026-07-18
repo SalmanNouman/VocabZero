@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import logging
 import os
-from pathlib import Path
 
 from vocab_zero.core.dictionary import DictionaryManager
 from vocab_zero.core.engine import TranslationEngine
@@ -24,16 +22,10 @@ def build_engine(
       endpoint, or ``"openai"`` (default) to use any OpenAI-compatible endpoint.
     - ``OPENAI_API_KEY`` / ``OPENAI_BASE_URL`` / ``LLM_MODEL_NAME``: used when
       provider is ``"openai"`` or ``"gemma"`` with an OpenAI-compatible endpoint.
-    - ``VOCABZERO_CMVN`` / ``VOCABZERO_VTLN`` / ``VOCABZERO_LIFTERING`` /
-      ``VOCABZERO_DELTAS``: toggle audio normalization layers (1/0).
-    - ``VOCABZERO_DTW_THRESHOLD_36`` / ``VOCABZERO_DTW_THRESHOLD_12``: DTW
-      distance thresholds for 36-dim and 12-dim features.
+    - ``VOCABZERO_MATCH_DISTANCE_THRESHOLD``: maximum cosine distance for a
+      Whisper embedding to be considered a match.
     - ``VOCABZERO_MIN_CONFIDENCE``: minimum confidence gate for accepting matches.
-
-    If a ``calibration.json`` file exists alongside the dictionary, its threshold
-    values are loaded and override the defaults / env vars.
     """
-    _logger = logging.getLogger(__name__)
     dictionary = DictionaryManager(path=dictionary_path)
 
     vector_store: VectorStoreClient | None = None
@@ -41,14 +33,7 @@ def build_engine(
         vector_store = VectorStoreClient(persist_dir=vector_db_path)
 
     config = TranslationConfig.from_env()
-    if audio_config is not None:
-        effective_audio_config = audio_config
-    else:
-        effective_audio_config = AudioConfig.from_env()
-        calibration_path = Path(dictionary_path).parent / "calibration.json"
-        if calibration_path.exists():
-            effective_audio_config = AudioConfig.load_calibration(calibration_path, effective_audio_config)
-            _logger.info("Loaded calibration from %s", calibration_path)
+    effective_audio_config = audio_config if audio_config is not None else AudioConfig.from_env()
 
     llm_client: GemmaClient | OpenAICompatibleClient | None = None
     provider = os.getenv("LLM_PROVIDER", "openai").lower()

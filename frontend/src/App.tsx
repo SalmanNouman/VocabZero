@@ -8,7 +8,6 @@ import {
 } from "./components/TranslationBoard";
 import { LexiconPanel } from "./components/LexiconPanel";
 import { TeachDialog } from "./components/TeachDialog";
-import { CalibrationWizard } from "./components/CalibrationWizard";
 import { Toast } from "./components/Toast";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import type { LexiconEntry } from "./types";
@@ -24,8 +23,6 @@ export default function App() {
   const [peaksPerFrame, setPeaksPerFrame] = useState(2);
   const [gateThreshold, setGateThreshold] = useState(0.5);
   const [wordsDetected, setWordsDetected] = useState(0);
-  const [dtwThreshold36, setDtwThreshold36] = useState<number | null>(null);
-  const [dtwThreshold12, setDtwThreshold12] = useState<number | null>(null);
 
   // Lists & data tables
   const [lexiconData, setLexiconData] = useState<LexiconEntry[]>([]);
@@ -33,7 +30,6 @@ export default function App() {
   const [staticBubbles, setStaticBubbles] = useState<StaticWordBubble[]>([]);
 
   // Dialog/Modal overlays
-  const [isCalibrateOpen, setIsCalibrateOpen] = useState(false);
   const [isTeachOpen, setIsTeachOpen] = useState(false);
   const [isLexiconOpen, setIsLexiconOpen] = useState(false);
 
@@ -86,25 +82,8 @@ export default function App() {
     }
   };
 
-  const fetchAudioConfig = async () => {
-    try {
-      const resp = await fetch("/api/audio_config");
-      const result = await resp.json();
-      if (result.ok && result.data) {
-        setDtwThreshold36(
-          result.data.dtw_threshold_36 || result.data.dtw_threshold,
-        );
-        setDtwThreshold12(result.data.dtw_threshold_12);
-        setGateThreshold(result.data.min_confidence_gate || 0.5);
-      }
-    } catch (err) {
-      console.error("Failed to fetch audio config:", err);
-    }
-  };
-
   useEffect(() => {
     fetchLexicon();
-    fetchAudioConfig();
   }, []);
 
   // Clean up all audio nodes on component unmount
@@ -414,10 +393,6 @@ export default function App() {
     }
   };
 
-  const handleCalibrationComplete = (newThreshold: number) => {
-    setDtwThreshold36(newThreshold);
-  };
-
   return (
     <div className="flex flex-col min-h-[100dvh] bg-background text-foreground selection:bg-accent/30 selection:text-accent-foreground">
       <Header onViewLexicon={() => setIsLexiconOpen(true)} />
@@ -435,9 +410,6 @@ export default function App() {
               gateThreshold={gateThreshold}
               onGateThresholdChange={setGateThreshold}
               wordsDetected={wordsDetected}
-              dtwThreshold36={dtwThreshold36}
-              dtwThreshold12={dtwThreshold12}
-              onCalibrateOpen={() => setIsCalibrateOpen(true)}
               visualizerComponent={
                 <VisualizerCanvas
                   analyserNode={analyserNode}
@@ -465,14 +437,6 @@ export default function App() {
         lexiconData={lexiconData}
         onDelete={handleDeleteLexicon}
         isLoading={isLexiconLoading}
-      />
-
-      {/* Mic Calibration Wizard Overlay */}
-      <CalibrationWizard
-        isOpen={isCalibrateOpen}
-        onClose={() => setIsCalibrateOpen(false)}
-        gateThreshold={gateThreshold}
-        onCalibrationComplete={handleCalibrationComplete}
       />
 
       {/* Sound Teaching Dialog Overlay */}
