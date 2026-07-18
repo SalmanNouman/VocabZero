@@ -81,6 +81,11 @@ class DictionaryManager:
         self.path = Path(path)
         self.serializer = serializer or JsonSerializer()
         self._entries: dict[str, LexiconEntry] = {}
+        
+        # Initialize VectorStoreClient pointing to a persistent directory in the same path
+        from vocab_zero.core.vector_db import VectorStoreClient
+        persist_dir = self.path.parent / ".chroma"
+        self.vector_store = VectorStoreClient(persist_dir=persist_dir)
         self.ngram_model = NGramModel()
         self._lock = RLock()
         self.load()
@@ -90,40 +95,40 @@ class DictionaryManager:
             return self._entries.get(source_term)
 
     def lookup_by_hash(self, acoustic_hash: str) -> LexiconEntry | None:
-        """Lookup a lexicon entry by its acoustic-hash source_term (e.g. ``sound_8f2a1c``).
-
-        Semantically identical to ``lookup``; named to make intent clear when
-        the source_term is an auto-generated acoustic hash rather than text.
-        """
-        with self._lock:
-            return self._entries.get(acoustic_hash)
+        return self.lookup(acoustic_hash)
 
     def insert(self, entry: LexiconEntry) -> bool:
         with self._lock:
             if entry.source_term in self._entries:
                 return False
             self._entries[entry.source_term] = entry
+            self.vector_store.add_entry(entry)
             for example in entry.context_examples:
                 self.ngram_model.train_on_sentence(example)
+            self.save()
             return True
 
     def upsert(self, entry: LexiconEntry) -> LexiconEntry:
         with self._lock:
             self._entries[entry.source_term] = entry
+            self.vector_store.add_entry(entry)
             self.ngram_model = NGramModel()
             for stored in self._entries.values():
                 for example in stored.context_examples:
                     self.ngram_model.train_on_sentence(example)
+            self.save()
             return entry
 
     def update_confidence(self, source_term: str, delta: float) -> LexiconEntry | None:
         with self._lock:
-            entry = self._entries.get(source_term)
+            entry = self.lookup(source_term)
             if entry is None:
                 return None
             confidence = min(1.0, max(0.0, entry.confidence + delta))
             updated = entry.model_copy(update={"confidence": confidence})
             self._entries[source_term] = updated
+            self.vector_store.add_entry(updated)
+            self.save()
             return updated
 
     def delete(self, source_term: str) -> bool:
@@ -131,6 +136,8 @@ class DictionaryManager:
             if source_term not in self._entries:
                 return False
             del self._entries[source_term]
+            self.vector_store.delete(source_term)
+            self.save()
             return True
 
     def has(self, source_term: str) -> bool:
@@ -160,6 +167,10 @@ class DictionaryManager:
                 return False
 
             self._entries = entries
+            self.vector_store.clear()
+            for entry in self._entries.values():
+                self.vector_store.add_entry(entry)
+
             self.ngram_model = NGramModel()
             for entry in self._entries.values():
                 for example in entry.context_examples:
@@ -172,7 +183,7 @@ class DictionaryManager:
                 if len(entry.mfcc_templates) > max_templates:
                     pruned = k_medoids(entry.mfcc_templates, max_templates)
                     entry.mfcc_templates = pruned
-            self.save()
+                    self.upsert(entry)
 
     def _dump_entries(self) -> JsonObject:
         return {
@@ -189,3 +200,5 @@ class DictionaryManager:
             entry = LexiconEntry.model_validate(entry_data)
             entries[entry.source_term] = entry
         return entries
+
+
