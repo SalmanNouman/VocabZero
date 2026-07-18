@@ -25,6 +25,10 @@ def build_engine(
     - ``VOCABZERO_MATCH_DISTANCE_THRESHOLD``: maximum cosine distance for a
       Whisper embedding to be considered a match.
     - ``VOCABZERO_MIN_CONFIDENCE``: minimum confidence gate for accepting matches.
+    - ``VOCABZERO_AMBIGUITY_MARGIN_RATIO``: distance margin (as a fraction of the
+      match threshold) below which two candidates are treated as ambiguous.
+    - ``VOCABZERO_AMBIGUITY_CONFIDENCE_FLOOR``: minimum confidence retained for an
+      accepted-but-ambiguous match.
     """
     dictionary = DictionaryManager(path=dictionary_path)
 

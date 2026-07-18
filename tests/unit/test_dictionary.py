@@ -225,3 +225,40 @@ def test_prune_templates_reduces_embeddings(tmp_path: Path) -> None:
     manager.prune_templates(max_templates=5)
 
     assert len(manager.lookup("hi").embeddings) == 5
+
+
+def test_embeddings_validation_rejects_ragged_and_non_finite() -> None:
+    with pytest.raises(ValueError):
+        LexiconEntry(
+            source_term="hi",
+            target_term="hola",
+            embeddings=[[1.0, 2.0], [1.0, 2.0, 3.0]],
+        )
+
+    with pytest.raises(ValueError):
+        LexiconEntry(
+            source_term="hi",
+            target_term="hola",
+            embeddings=[[float("nan")] + [0.0] * 383],
+        )
+
+    with pytest.raises(ValueError):
+        LexiconEntry(source_term="hi", target_term="hola", embeddings=[[]])
+
+
+def test_load_failure_clears_stale_vector_index(tmp_path: Path) -> None:
+    path = tmp_path / "lexicon.json"
+    vector = [1.0] + [0.0] * 383
+    entry = make_entry(source_term="hi", target_term="hola")
+    entry.embeddings = [vector]
+
+    manager = DictionaryManager(path)
+    manager.insert(entry)
+    manager.save()
+    assert manager.vector_store.search_by_vector(vector, k=1)
+
+    # Corrupt the lexicon on disk, then reload: the derived index must be cleared
+    # so a failed load can't serve stale rows from the previous lexicon.
+    path.write_text("{ not valid json", encoding="utf-8")
+    assert manager.load() is False
+    assert manager.vector_store.search_by_vector(vector, k=1) == []

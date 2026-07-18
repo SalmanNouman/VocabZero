@@ -319,14 +319,16 @@ class TranslationEngine:
         # Cosine-distance threshold for Whisper embedding matches.
         distance_threshold = self.audio_config.match_distance_threshold
 
-        # Sort candidates by distance (ascending)
-        candidates = sorted(candidates, key=lambda x: x[1])
+        # Only candidates below the distance threshold are eligible; drop the rest
+        # so reranking (n-gram/LLM) can never promote an out-of-threshold match.
+        candidates = sorted(
+            (item for item in candidates if item[1] < distance_threshold),
+            key=lambda x: x[1],
+        )
+        if not candidates:
+            return None, 0.0
 
         best_entry, best_dist = candidates[0]
-
-        # Check if the acoustic distance is below the threshold. If even the best is above, it's not a match.
-        if best_dist >= distance_threshold:
-            return None, 0.0
 
         if len(candidates) == 1:
             conf = float(max(0.0, min(1.0, 1.0 - (best_dist / distance_threshold))))

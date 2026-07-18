@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from threading import RLock
 from typing import Iterator, Protocol, TypeAlias
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from vocab_zero.utils.audio import k_medoids
 
@@ -20,6 +21,20 @@ class LexiconEntry(BaseModel):
     context_examples: list[str] = Field(default_factory=list)
     # One Whisper-tiny encoder embedding (384 floats) per taught recording.
     embeddings: list[list[float]] = Field(default_factory=list)
+
+    @field_validator("embeddings")
+    @classmethod
+    def _validate_embeddings(cls, value: list[list[float]]) -> list[list[float]]:
+        dims: set[int] = set()
+        for vector in value:
+            if not vector:
+                raise ValueError("embedding vectors must be non-empty")
+            if any(not math.isfinite(component) for component in vector):
+                raise ValueError("embedding vectors must contain only finite values")
+            dims.add(len(vector))
+        if len(dims) > 1:
+            raise ValueError("all embedding vectors must share the same dimensionality")
+        return value
 
 
 class NGramModel:
@@ -155,12 +170,15 @@ class DictionaryManager:
     def load(self) -> bool:
         with self._lock:
             if not self.path.exists():
+                # No lexicon to load: drop any stale rows left in the shared index.
+                self.vector_store.clear()
                 return False
 
             try:
                 loaded = self.serializer.loads(self.path.read_text(encoding="utf-8"))
                 entries = self._parse_entries(loaded)
             except (OSError, json.JSONDecodeError, ValidationError, TypeError, ValueError):
+                self.vector_store.clear()
                 return False
 
             self._entries = entries

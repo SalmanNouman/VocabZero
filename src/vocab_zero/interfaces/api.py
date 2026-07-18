@@ -277,11 +277,17 @@ async def translate(request: Request, payload: TranslateRequest):
             # Whisper inference runs synchronously in the main thread: it is
             # fast (~30ms) and PyTorch's forward pass is unstable when dispatched
             # to FastAPI's background thread pool.
-            candidates = perform_audio_matching_candidates(
-                payload.audio_data,
-                engine.dictionary,
-                engine.audio_config,
-            )
+            try:
+                candidates = perform_audio_matching_candidates(
+                    payload.audio_data,
+                    engine.dictionary,
+                    engine.audio_config,
+                )
+            except Exception:
+                logger.exception("Whisper embedding/matching failed for audio translate")
+                return api_error(
+                    "extraction_failed", "Failed to process audio for matching"
+                )
 
             best_match, conf = engine.rerank_acoustic_candidates(candidates, payload.context)
             logger.info(
@@ -311,7 +317,14 @@ async def translate(request: Request, payload: TranslateRequest):
                 reason_msg = "No matching embedding below threshold"
 
                 if candidates:
-                    reason_msg = f"Match distance too high ({candidates[0][1]:.4f})"
+                    nearest_dist = min(dist for _, dist in candidates)
+                    if nearest_dist >= engine.audio_config.match_distance_threshold:
+                        reason_msg = f"Match distance too high ({nearest_dist:.4f})"
+                    else:
+                        reason_msg = (
+                            "Below distance threshold but failed the confidence/ambiguity "
+                            f"gate (nearest distance {nearest_dist:.4f})"
+                        )
 
                 response_data = {
                     "translated_text": "",
@@ -373,6 +386,13 @@ async def feedback(request: Request, payload: FeedbackRequestData):
             return api_error("extraction_failed", message)
 
         return api_error("invalid_input", message)
+
+    except Exception:
+        logger.exception("Failed to extract a speech embedding from feedback audio")
+        return api_error(
+            "extraction_failed",
+            "Failed to extract a speech embedding from the provided audio",
+        )
 
     if result.status == "error":
         return api_error(

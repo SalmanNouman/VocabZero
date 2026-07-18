@@ -692,6 +692,37 @@ def test_rerank_min_confidence_gate_rejects_single_candidate(temp_dictionary, mo
     assert conf == pytest.approx(0.6, abs=0.01)
 
 
+def test_rerank_drops_candidates_above_distance_threshold(
+    temp_dictionary, mock_vector_store, mock_llm_client, config
+):
+    """An out-of-threshold candidate must never be promoted by n-gram/LLM reranking."""
+    audio_cfg = AudioConfig(match_distance_threshold=10.0, min_confidence_gate=0.0)
+    engine = TranslationEngine(
+        dictionary=temp_dictionary,
+        vector_store=mock_vector_store,
+        llm_client=mock_llm_client,
+        config=config,
+        audio_config=audio_cfg,
+    )
+    close = LexiconEntry(source_term="close", target_term="near", confidence=1.0)
+    far = LexiconEntry(source_term="far", target_term="distant", confidence=1.0)
+
+    # far (dist 12.0) exceeds the 10.0 threshold; even with a strong n-gram/LLM
+    # signal it must be discarded, and only the in-threshold candidate can win.
+    engine.dictionary.ngram_model.get_transition_probability = Mock(
+        side_effect=lambda _prev, target: 1.0 if target == "distant" else 0.0
+    )
+    entry, conf = engine.rerank_acoustic_candidates(
+        [(close, 4.0), (far, 12.0)], context="foo"
+    )
+    assert entry == close
+
+    # If every candidate is above threshold, there is no match.
+    entry, conf = engine.rerank_acoustic_candidates([(far, 12.0)])
+    assert entry is None
+    assert conf == 0.0
+
+
 def test_rerank_min_confidence_gate_rejects_reranked_result(temp_dictionary, mock_vector_store, mock_llm_client, config):
     """Reranked result with final confidence below min_confidence_gate is rejected."""
     audio_cfg = AudioConfig(match_distance_threshold=10.0, min_confidence_gate=0.5)

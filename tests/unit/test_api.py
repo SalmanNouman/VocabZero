@@ -641,6 +641,46 @@ def test_translate_audio_no_match(client):
 
 
 
+def test_translate_audio_extraction_error_returns_clean_error(client):
+    dummy_audio = [0.0] * 1000
+
+    with patch(
+        "vocab_zero.interfaces.api.extract_whisper_embedding",
+        side_effect=RuntimeError("torch exploded"),
+    ):
+        response = client.post(
+            "/api/translate",
+            json={"source_term": "200_500", "audio_data": dummy_audio},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["error"]["code"] == "extraction_failed"
+
+
+def test_feedback_audio_extraction_error_returns_clean_error(client):
+    dummy_audio = [0.0] * 1000
+
+    with patch(
+        "vocab_zero.interfaces.api.extract_whisper_embedding",
+        side_effect=RuntimeError("torch exploded"),
+    ):
+        response = client.post(
+            "/api/feedback",
+            json={
+                "source_term": "200_500",
+                "target_term": "hello",
+                "audio_data": dummy_audio,
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["error"]["code"] == "extraction_failed"
+
+
 def test_feedback_audio_save(client):
 
     engine = client.app.state.engine
@@ -681,23 +721,27 @@ def test_feedback_audio_save(client):
 
     dummy_audio = [0.0] * 1000
 
-    response = client.post(
+    with patch(
+        "vocab_zero.interfaces.api.extract_whisper_embedding",
+        return_value=[0.1] * 384,
+    ):
+        response = client.post(
 
-        "/api/feedback",
+            "/api/feedback",
 
-        json={
+            json={
 
-            "source_term": "200_500",
+                "source_term": "200_500",
 
-            "target_term": "hello",
+                "target_term": "hello",
 
-            "audio_data": dummy_audio,
+                "audio_data": dummy_audio,
 
-            "context": "greet",
+                "context": "greet",
 
-        },
+            },
 
-    )
+        )
 
 
 
@@ -729,11 +773,7 @@ def test_feedback_audio_save(client):
 
     assert len(entry.embeddings[0]) == 384
 
-    # Default AudioConfig produces 36-dim frames (12 static + 12 delta + 12 delta-delta)
-
     assert all(isinstance(v, float) for v in entry.embeddings[0])
-
-
 
 
 
