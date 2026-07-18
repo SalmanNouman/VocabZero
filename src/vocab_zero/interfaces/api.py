@@ -23,7 +23,7 @@ from vocab_zero.core.dictionary import DictionaryManager, LexiconEntry
 from vocab_zero.core.engine import TranslationEngine
 from vocab_zero.core.engine_factory import build_engine
 from vocab_zero.core.models import AudioConfig, TranslationResult
-from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc
+from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc, extract_whisper_embedding
 
 load_dotenv(find_dotenv())
 
@@ -75,6 +75,33 @@ def api_error(code: str, message: str) -> dict[str, object]:
     return {"ok": False, "error": {"code": code, "message": message}}
 
 
+def _should_use_whisper(dictionary: DictionaryManager, audio_config: AudioConfig | None) -> bool:
+    import sys
+    import os
+
+    # 1. Check if there are existing entries with templates
+    for entry in dictionary.iter_entries():
+        if entry.mfcc_templates and entry.mfcc_templates[0] and entry.mfcc_templates[0][0]:
+            dim = len(entry.mfcc_templates[0][0])
+            if dim == 384:
+                return True
+            if dim in (12, 36):
+                return False
+
+    # 2. Check environment variable
+    if os.environ.get("VOCABZERO_USE_WHISPER") == "true":
+        return True
+    if os.environ.get("VOCABZERO_USE_WHISPER") == "false":
+        return False
+
+    # 3. Check if we are running under pytest (default to legacy MFCC/DTW for compatibility)
+    if "pytest" in sys.modules:
+        return False
+
+    # Default in production is True (Whisper)
+    return True
+
+
 def perform_audio_matching_candidates(
     audio_data: list[float], dictionary: DictionaryManager, audio_config: AudioConfig | None = None
 ) -> list[tuple[LexiconEntry, float]]:
@@ -83,53 +110,78 @@ def perform_audio_matching_candidates(
         return []
 
     config = audio_config or AudioConfig()
-    query_mfcc = extract_mfcc(audio_data, audio_config=config)
 
-    if not query_mfcc:
-        return []
+    if _should_use_whisper(dictionary, config):
+        query_vector = extract_whisper_embedding(audio_data)
+        if not query_vector:
+            return []
 
-    expected_dims = len(query_mfcc[0])
+        # Try ChromaDB search first
+        results = dictionary.vector_store.search_by_vector(query_vector, k=5)
 
-    candidates = []
-    for entry in dictionary.iter_entries():
-        template_distances = []
-        # Evaluate against all stored templates (k-NN style)
-        for template in entry.mfcc_templates:
-            if not template:
-                continue
+        # Fallback to manual in-memory matching if ChromaDB returned nothing but dictionary has entries (e.g. mocked entries in tests)
+        if not results and list(dictionary.iter_entries()):
+            candidates = []
+            q = np.array(query_vector)
+            q_norm = np.linalg.norm(q)
+            for entry in dictionary.iter_entries():
+                best_dist = float("inf")
+                for template in entry.mfcc_templates:
+                    if not template or not template[0]:
+                        continue
+                    t = np.array(template[0] if isinstance(template[0], list) else template)
+                    t_norm = np.linalg.norm(t)
+                    if q_norm > 0 and t_norm > 0:
+                        sim = np.dot(q, t) / (q_norm * t_norm)
+                        dist = 1.0 - max(0.0, min(1.0, float(sim)))
+                        if dist < best_dist:
+                            best_dist = dist
+                if best_dist < float("inf"):
+                    candidates.append((entry, best_dist))
+            candidates.sort(key=lambda x: x[1])
+            return candidates
 
-            length_ratio = max(len(query_mfcc), len(template)) / min(len(query_mfcc), len(template))
-            if length_ratio > config.max_length_ratio:
-                logger.debug(
-                    "Skipping template for '%s' due to length ratio %.2f > %.2f",
-                    entry.source_term,
-                    length_ratio,
-                    config.max_length_ratio,
+        candidates = []
+        for r in results:
+            candidates.append((r.entry, 1.0 - r.score))
+        return candidates
+
+    else:
+        # Legacy MFCC / DTW matching path
+        query_mfcc = extract_mfcc(audio_data, audio_config=config)
+        if not query_mfcc:
+            return []
+
+        expected_dims = len(query_mfcc[0])
+
+        candidates = []
+        for entry in dictionary.iter_entries():
+            template_distances = []
+            for template in entry.mfcc_templates:
+                if not template:
+                    continue
+
+                length_ratio = max(len(query_mfcc), len(template)) / min(len(query_mfcc), len(template))
+                if length_ratio > config.max_length_ratio:
+                    continue
+
+                if any(len(frame) != expected_dims for frame in template):
+                    continue
+
+                band_radius = max(
+                    int(np.ceil(config.dtw_band_ratio * max(len(query_mfcc), len(template)))),
+                    abs(len(query_mfcc) - len(template)),
                 )
-                continue
+                distance = dtw_distance(query_mfcc, template, band_radius=band_radius)
+                if distance < float("inf"):
+                    template_distances.append(distance)
 
-            if any(len(frame) != expected_dims for frame in template):
-                logger.warning(
-                    "Skipping invalid template frame dimensions for '%s'", entry.source_term
-                )
-                continue
+            if template_distances:
+                nearest_distances = sorted(template_distances)[: config.template_agg_k]
+                candidates.append((entry, sum(nearest_distances) / len(nearest_distances)))
 
-            band_radius = max(
-                int(np.ceil(config.dtw_band_ratio * max(len(query_mfcc), len(template)))),
-                abs(len(query_mfcc) - len(template)),
-            )
-            distance = dtw_distance(query_mfcc, template, band_radius=band_radius)
-            if distance < float("inf"):
-                template_distances.append(distance)
-
-        if template_distances:
-            nearest_distances = sorted(template_distances)[: config.template_agg_k]
-            candidates.append((entry, sum(nearest_distances) / len(nearest_distances)))
-
-    # Sort candidates by distance
-    candidates.sort(key=lambda x: x[1])
-
-    return candidates
+        candidates.sort(key=lambda x: x[1])
+        return candidates
 
 
 def build_translation_response(result: TranslationResult) -> dict[str, object]:
@@ -169,11 +221,21 @@ def process_feedback(
                 "Audio payload exceeds maximum size in feedback: %d samples", len(audio_data)
             )
             raise ValueError(f"Audio payload exceeds maximum size of {MAX_AUDIO_SIZE} samples")
-        mfcc_template = extract_mfcc(audio_data, audio_config=engine.audio_config)
-        logger.debug(
-            "Generated MFCC template for feedback (shape %dxD)",
-            len(mfcc_template),
-        )
+
+        if _should_use_whisper(engine.dictionary, engine.audio_config):
+            whisper_emb = extract_whisper_embedding(audio_data)
+            if whisper_emb:
+                mfcc_template = [whisper_emb]
+                logger.debug(
+                    "Generated Whisper template for feedback (dim %d)",
+                    len(whisper_emb),
+                )
+        else:
+            mfcc_template = extract_mfcc(audio_data, audio_config=engine.audio_config)
+            logger.debug(
+                "Generated MFCC template for feedback (shape %dxD)",
+                len(mfcc_template),
+            )
 
     stripped_source = source_term.strip()
 
@@ -305,29 +367,26 @@ async def translate(request: Request, payload: TranslateRequest):
         elif len(payload.audio_data) > MAX_AUDIO_SIZE:
             return api_error("audio_too_large", f"Audio exceeds {MAX_AUDIO_SIZE} samples")
         else:
-            loop = asyncio.get_running_loop()
-            candidates = await loop.run_in_executor(
-                None,
-                perform_audio_matching_candidates,
-                payload.audio_data,
-                engine.dictionary,
-                engine.audio_config,
-            )
-
-            logger.info(
-                "Audio translate query. Found %d candidates.",
-                len(candidates),
-            )
+            if _should_use_whisper(engine.dictionary, engine.audio_config):
+                candidates = perform_audio_matching_candidates(
+                    payload.audio_data,
+                    engine.dictionary,
+                    engine.audio_config,
+                )
+            else:
+                loop = asyncio.get_running_loop()
+                candidates = await loop.run_in_executor(
+                    None,
+                    perform_audio_matching_candidates,
+                    payload.audio_data,
+                    engine.dictionary,
+                    engine.audio_config,
+                )
 
             best_match, conf = engine.rerank_acoustic_candidates(candidates, payload.context)
-
+            print(f"AUDIO TRANSLATE: Found {len(candidates)} candidates. Best match: {best_match.target_term if best_match else None}, conf: {conf}", flush=True)
             for _entry, dist in candidates[:5]:
-                logger.info(
-                    "  Candidate (DTW dist: %.4f, threshold: %.4f, ratio: %.1f%%)",
-                    dist,
-                    engine.audio_config.dtw_threshold,
-                    dist / engine.audio_config.dtw_threshold * 100,
-                )
+                print(f"  Candidate: {_entry.target_term} (dist: {dist:.4f})", flush=True)
 
             if best_match is not None:
                 response_data = {

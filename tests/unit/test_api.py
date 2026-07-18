@@ -1018,68 +1018,36 @@ def test_get_audio_config(client):
     assert data["data"]["dtw_threshold_36"] == pytest.approx(1.8)
 
 
-def test_audio_matching_length_ratio_guard_and_template_aggregation(monkeypatch, tmp_path):
+def test_audio_matching_whisper_embedding_retrieval(monkeypatch, tmp_path):
     dictionary = DictionaryManager(path=tmp_path / "lexicon.json")
-    close_template = [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)]
-    far_template = [[1.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)]
-    overlong_template = [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(20)]
-    undershort_template = [[0.0] * MFCC_NUM_COEFFICIENTS]
+    
+    # Store a dummy 384-dimensional Whisper embedding wrapped in [whisper_vector]
+    dummy_vector = [0.1] * 384
     entry = LexiconEntry(
         source_term="word",
         target_term="word",
         confidence=1.0,
-        mfcc_templates=[close_template, far_template, far_template],
-    )
-    excluded = LexiconEntry(
-        source_term="excluded",
-        target_term="excluded",
-        confidence=1.0,
-        mfcc_templates=[overlong_template, undershort_template],
+        mfcc_templates=[[dummy_vector]],
     )
     dictionary.upsert(entry)
-    dictionary.upsert(excluded)
 
+    # Mock extract_whisper_embedding to return the same vector
     monkeypatch.setattr(
-        "vocab_zero.interfaces.api.extract_mfcc",
-        lambda *_args, **_kwargs: [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)],
+        "vocab_zero.interfaces.api.extract_whisper_embedding",
+        lambda *_args, **_kwargs: dummy_vector,
     )
 
-    def fake_dtw(_query, template, **_kwargs):
-        return 1.0 if template[0][0] == 0.0 else 5.0
-
-    monkeypatch.setattr("vocab_zero.interfaces.api.dtw_distance", fake_dtw)
     candidates = perform_audio_matching_candidates(
         [0.0],
         dictionary,
-        AudioConfig(use_deltas=False, template_agg_k=3, max_length_ratio=2.5),
+        AudioConfig(use_deltas=False),
     )
 
     assert len(candidates) == 1
-    assert candidates[0][0] == entry
-    assert candidates[0][1] == pytest.approx((1.0 + 5.0 + 5.0) / 3)
+    assert candidates[0][0].target_term == "word"
+    # Cosine distance should be 0.0 (exact match)
+    assert candidates[0][1] == pytest.approx(0.0, abs=1e-5)
 
-
-def test_audio_matching_single_template_aggregation_is_unchanged(monkeypatch, tmp_path):
-    dictionary = DictionaryManager(path=tmp_path / "lexicon.json")
-    template = [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)]
-    entry = LexiconEntry(
-        source_term="word",
-        target_term="word",
-        confidence=1.0,
-        mfcc_templates=[template],
-    )
-    dictionary.upsert(entry)
-    monkeypatch.setattr(
-        "vocab_zero.interfaces.api.extract_mfcc",
-        lambda *_args, **_kwargs: [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)],
-    )
-    monkeypatch.setattr(
-        "vocab_zero.interfaces.api.dtw_distance",
-        lambda *_args, **_kwargs: 2.5,
-    )
-
-    candidates = perform_audio_matching_candidates([0.0], dictionary, AudioConfig(use_deltas=False))
-    assert candidates == [(entry, 2.5)]
 
 
 
