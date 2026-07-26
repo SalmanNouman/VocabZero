@@ -26,13 +26,6 @@ from vocab_zero.interfaces.api import app, periodic_pruning_task, perform_audio_
 
 
 
-MFCC_NUM_COEFFICIENTS = 12
-
-MFCC_36_DIM = 36
-
-
-
-
 
 class MockEngine:
 
@@ -534,7 +527,6 @@ def test_translate_audio_match(client):
 
     # Setup database entry with a stored MFCC template
 
-    dummy_mfcc = [[0.1] * MFCC_36_DIM for _ in range(5)]
 
     entry = LexiconEntry(
 
@@ -544,11 +536,13 @@ def test_translate_audio_match(client):
 
         confidence=1.0,
 
-        mfcc_templates=[dummy_mfcc],
+        embeddings=[[0.1] * 384],
 
     )
 
     engine.dictionary._entries = {"200_500": entry}
+
+    engine.dictionary.vector_store.search_by_vector.return_value = []
 
     engine.rerank_acoustic_candidates.return_value = (entry, 0.9)
 
@@ -558,7 +552,7 @@ def test_translate_audio_match(client):
 
 
 
-    with patch("vocab_zero.interfaces.api.dtw_distance", return_value=0.0):
+    with patch("vocab_zero.interfaces.api.extract_whisper_embedding", return_value=[0.1] * 384):
 
         response = client.post(
 
@@ -594,7 +588,6 @@ def test_translate_audio_no_match(client):
 
     # query will be all zeros, target is all ones
 
-    dummy_mfcc = [[1.0] * MFCC_36_DIM for _ in range(5)]
 
     entry = LexiconEntry(
 
@@ -604,11 +597,13 @@ def test_translate_audio_no_match(client):
 
         confidence=1.0,
 
-        mfcc_templates=[dummy_mfcc],
+        embeddings=[[0.1] * 384],
 
     )
 
     engine.dictionary._entries = {"200_500": entry}
+
+    engine.dictionary.vector_store.search_by_vector.return_value = []
 
     engine.rerank_acoustic_candidates.return_value = (None, 0.0)
 
@@ -618,7 +613,7 @@ def test_translate_audio_no_match(client):
 
 
 
-    with patch("vocab_zero.interfaces.api.dtw_distance", return_value=99.0):
+    with patch("vocab_zero.interfaces.api.extract_whisper_embedding", return_value=[0.1] * 384):
 
         response = client.post(
 
@@ -646,6 +641,46 @@ def test_translate_audio_no_match(client):
 
 
 
+def test_translate_audio_extraction_error_returns_clean_error(client):
+    dummy_audio = [0.0] * 1000
+
+    with patch(
+        "vocab_zero.interfaces.api.extract_whisper_embedding",
+        side_effect=RuntimeError("torch exploded"),
+    ):
+        response = client.post(
+            "/api/translate",
+            json={"source_term": "200_500", "audio_data": dummy_audio},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["error"]["code"] == "extraction_failed"
+
+
+def test_feedback_audio_extraction_error_returns_clean_error(client):
+    dummy_audio = [0.0] * 1000
+
+    with patch(
+        "vocab_zero.interfaces.api.extract_whisper_embedding",
+        side_effect=RuntimeError("torch exploded"),
+    ):
+        response = client.post(
+            "/api/feedback",
+            json={
+                "source_term": "200_500",
+                "target_term": "hello",
+                "audio_data": dummy_audio,
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ok"] is False
+    assert data["error"]["code"] == "extraction_failed"
+
+
 def test_feedback_audio_save(client):
 
     engine = client.app.state.engine
@@ -664,7 +699,7 @@ def test_feedback_audio_save(client):
 
         context_examples=[],
 
-        mfcc_templates=[],
+        embeddings=[],
 
     )
 
@@ -686,23 +721,27 @@ def test_feedback_audio_save(client):
 
     dummy_audio = [0.0] * 1000
 
-    response = client.post(
+    with patch(
+        "vocab_zero.interfaces.api.extract_whisper_embedding",
+        return_value=[0.1] * 384,
+    ):
+        response = client.post(
 
-        "/api/feedback",
+            "/api/feedback",
 
-        json={
+            json={
 
-            "source_term": "200_500",
+                "source_term": "200_500",
 
-            "target_term": "hello",
+                "target_term": "hello",
 
-            "audio_data": dummy_audio,
+                "audio_data": dummy_audio,
 
-            "context": "greet",
+                "context": "greet",
 
-        },
+            },
 
-    )
+        )
 
 
 
@@ -728,17 +767,13 @@ def test_feedback_audio_save(client):
 
     assert entry.target_term == "hello"
 
-    assert entry.mfcc_templates
+    assert entry.embeddings
 
-    assert len(entry.mfcc_templates) > 0
+    assert len(entry.embeddings) > 0
 
-    assert len(entry.mfcc_templates[0]) > 0
+    assert len(entry.embeddings[0]) == 384
 
-    # Default AudioConfig produces 36-dim frames (12 static + 12 delta + 12 delta-delta)
-
-    assert len(entry.mfcc_templates[0][0]) == MFCC_36_DIM
-
-
+    assert all(isinstance(v, float) for v in entry.embeddings[0])
 
 
 
@@ -851,62 +886,26 @@ def test_feedback_unknown_sound_auto_generates_acoustic_hash(client):
     assert entry.target_term == "hello"
 
 
-
-
-
-def test_feedback_12_dim_fallback_matches(client):
-
+def test_feedback_empty_embedding_fails_loudly(client):
     engine = client.app.state.engine
 
-    # Configure engine for 12-dim fallback
+    with patch(
+        "vocab_zero.interfaces.api.extract_whisper_embedding", return_value=[]
+    ):
+        response = client.post(
+            "/api/feedback",
+            json={
+                "source_term": "unknown_sound",
+                "target_term": "hello",
+                "audio_data": [0.0] * 1000,
+            },
+        )
 
-    engine.audio_config = AudioConfig(use_deltas=False)
-
-    engine.persist_learned_entry.return_value = TranslationResult(
-
-        translated_text="hello",
-
-        confidence=1.0,
-
-        source="human_feedback",
-
-        status="learned",
-
-    )
-
-
-
-    dummy_audio = [0.0] * 1000
-
-    response = client.post(
-
-        "/api/feedback",
-
-        json={
-
-            "source_term": "unknown_sound",
-
-            "target_term": "hello",
-
-            "audio_data": dummy_audio,
-
-        },
-
-    )
-
-
-
-    assert response.status_code == 200
-
-    args, _ = engine.persist_learned_entry.call_args
-
-    entry = args[0]
-
-    assert entry.source_term.startswith("sound_")
-
-    # 12-dim fallback produces 12-dim templates
-
-    assert len(entry.mfcc_templates[0][0]) == MFCC_NUM_COEFFICIENTS
+    data = response.json()
+    assert data["ok"] is False
+    assert data["error"]["code"] == "extraction_failed"
+    # Nothing should have been persisted when embedding extraction fails.
+    engine.persist_learned_entry.assert_not_called()
 
 
 
@@ -920,7 +919,7 @@ def test_periodic_pruning_task_prunes_without_blocking(tmp_path: Path):
 
 
 
-    templates = [[[float(i + j) * 0.01 for j in range(12)] for _ in range(5)] for i in range(8)]
+    templates = [[float(i) * 0.01 + float(j) for j in range(384)] for i in range(8)]
 
     entry = LexiconEntry(
 
@@ -930,13 +929,13 @@ def test_periodic_pruning_task_prunes_without_blocking(tmp_path: Path):
 
         confidence=1.0,
 
-        mfcc_templates=templates,
+        embeddings=templates,
 
     )
 
     dictionary.upsert(entry)
 
-    assert len(dictionary.lookup("term1").mfcc_templates) == 8
+    assert len(dictionary.lookup("term1").embeddings) == 8
 
 
 
@@ -978,7 +977,7 @@ def test_periodic_pruning_task_prunes_without_blocking(tmp_path: Path):
 
     assert pruned is not None
 
-    assert len(pruned.mfcc_templates) <= 5
+    assert len(pruned.embeddings) <= 5
 
     assert dictionary_path.exists()
 
@@ -986,7 +985,7 @@ def test_periodic_pruning_task_prunes_without_blocking(tmp_path: Path):
 
     saved_entry = next(e for e in saved["entries"] if e["source_term"] == "term1")
 
-    assert len(saved_entry["mfcc_templates"]) <= 5
+    assert len(saved_entry["embeddings"]) <= 5
 
 
 
@@ -1002,324 +1001,43 @@ def test_get_audio_config(client):
 
     assert data["ok"] is True
 
-    assert "dtw_threshold_36" in data["data"]
-
-    assert "dtw_threshold_12" in data["data"]
-
-    assert "dtw_threshold" in data["data"]
-
-    assert "min_confidence_gate" in data["data"]
+    assert data["data"]["match_distance_threshold"] == pytest.approx(0.30)
+    assert data["data"]["min_confidence_gate"] == pytest.approx(0.6)
     assert data["data"]["ambiguity_margin_ratio"] == pytest.approx(0.15)
     assert data["data"]["ambiguity_confidence_floor"] == pytest.approx(0.4)
-    assert data["data"]["dtw_band_ratio"] == pytest.approx(0.2)
-    assert data["data"]["max_length_ratio"] == pytest.approx(2.5)
-    assert data["data"]["template_agg_k"] == 3
-
-    assert data["data"]["dtw_threshold_36"] == pytest.approx(1.8)
+    assert data["data"]["sample_rate"] == 16000
 
 
-def test_audio_matching_length_ratio_guard_and_template_aggregation(monkeypatch, tmp_path):
+def test_audio_matching_whisper_embedding_retrieval(monkeypatch, tmp_path):
     dictionary = DictionaryManager(path=tmp_path / "lexicon.json")
-    close_template = [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)]
-    far_template = [[1.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)]
-    overlong_template = [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(20)]
-    undershort_template = [[0.0] * MFCC_NUM_COEFFICIENTS]
+    
+    # Store a dummy 384-dimensional Whisper embedding wrapped in [whisper_vector]
+    dummy_vector = [0.1] * 384
     entry = LexiconEntry(
         source_term="word",
         target_term="word",
         confidence=1.0,
-        mfcc_templates=[close_template, far_template, far_template],
-    )
-    excluded = LexiconEntry(
-        source_term="excluded",
-        target_term="excluded",
-        confidence=1.0,
-        mfcc_templates=[overlong_template, undershort_template],
+        embeddings=[dummy_vector],
     )
     dictionary.upsert(entry)
-    dictionary.upsert(excluded)
 
+    # Mock extract_whisper_embedding to return the same vector
     monkeypatch.setattr(
-        "vocab_zero.interfaces.api.extract_mfcc",
-        lambda *_args, **_kwargs: [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)],
+        "vocab_zero.interfaces.api.extract_whisper_embedding",
+        lambda *_args, **_kwargs: dummy_vector,
     )
 
-    def fake_dtw(_query, template, **_kwargs):
-        return 1.0 if template[0][0] == 0.0 else 5.0
-
-    monkeypatch.setattr("vocab_zero.interfaces.api.dtw_distance", fake_dtw)
     candidates = perform_audio_matching_candidates(
         [0.0],
         dictionary,
-        AudioConfig(use_deltas=False, template_agg_k=3, max_length_ratio=2.5),
+        AudioConfig(),
     )
 
     assert len(candidates) == 1
-    assert candidates[0][0] == entry
-    assert candidates[0][1] == pytest.approx((1.0 + 5.0 + 5.0) / 3)
+    assert candidates[0][0].target_term == "word"
+    # Cosine distance should be 0.0 (exact match)
+    assert candidates[0][1] == pytest.approx(0.0, abs=1e-5)
 
-
-def test_audio_matching_single_template_aggregation_is_unchanged(monkeypatch, tmp_path):
-    dictionary = DictionaryManager(path=tmp_path / "lexicon.json")
-    template = [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)]
-    entry = LexiconEntry(
-        source_term="word",
-        target_term="word",
-        confidence=1.0,
-        mfcc_templates=[template],
-    )
-    dictionary.upsert(entry)
-    monkeypatch.setattr(
-        "vocab_zero.interfaces.api.extract_mfcc",
-        lambda *_args, **_kwargs: [[0.0] * MFCC_NUM_COEFFICIENTS for _ in range(4)],
-    )
-    monkeypatch.setattr(
-        "vocab_zero.interfaces.api.dtw_distance",
-        lambda *_args, **_kwargs: 2.5,
-    )
-
-    candidates = perform_audio_matching_candidates([0.0], dictionary, AudioConfig(use_deltas=False))
-    assert candidates == [(entry, 2.5)]
-
-
-
-
-
-def test_calibrate_sample_and_clear(client):
-
-    # Generate a short sine wave as test audio
-
-    import numpy as np
-
-    t = np.linspace(0, 0.5, 8000, endpoint=False)
-
-    audio = np.sin(2 * np.pi * 440 * t).tolist()
-
-
-
-    client.app.state.calibration_samples = {}
-
-
-
-    with patch("vocab_zero.interfaces.api.extract_mfcc") as mock_mfcc:
-
-        mock_mfcc.return_value = [[0.1] * 12 for _ in range(10)]
-
-
-
-        response = client.post("/api/calibrate/sample", json={
-
-            "label": "phrase_1",
-
-            "audio_data": audio,
-
-        })
-
-        assert response.status_code == 200
-
-        data = response.json()
-
-        assert data["ok"] is True
-
-        assert data["data"]["label"] == "phrase_1"
-
-        assert data["data"]["sample_count"] == 1
-
-
-
-    # Clear
-
-    response = client.delete("/api/calibrate/samples")
-
-    assert response.status_code == 200
-
-    assert response.json()["ok"] is True
-
-    assert client.app.state.calibration_samples == {}
-
-
-
-
-
-def test_calibrate_sample_empty_label(client):
-
-    response = client.post("/api/calibrate/sample", json={
-
-        "label": "  ",
-
-        "audio_data": [0.1] * 3000,
-
-    })
-
-    data = response.json()
-
-    assert data["ok"] is False
-
-    assert data["error"]["code"] == "invalid_input"
-
-
-
-
-
-def test_calibrate_sample_too_short(client):
-
-    response = client.post("/api/calibrate/sample", json={
-
-        "label": "test",
-
-        "audio_data": [0.1] * 100,
-
-    })
-
-    data = response.json()
-
-    assert data["ok"] is False
-
-    assert data["error"]["code"] == "audio_too_short"
-
-
-
-
-
-def test_calibrate_compute_insufficient_data(client):
-
-    client.app.state.calibration_samples = {}
-
-    response = client.post("/api/calibrate/compute")
-
-    data = response.json()
-
-    assert data["ok"] is False
-
-    assert data["error"]["code"] == "insufficient_data"
-
-
-
-
-
-def test_calibrate_compute_success(client):
-
-    # Pre-populate with 2 labels, 2 templates each
-
-    client.app.state.calibration_samples = {
-
-        "phrase_1": [
-
-            [[0.1] * 12 for _ in range(10)],
-
-            [[0.12] * 12 for _ in range(10)],
-
-        ],
-
-        "phrase_2": [
-
-            [[0.9] * 12 for _ in range(10)],
-
-            [[0.88] * 12 for _ in range(10)],
-
-        ],
-
-    }
-
-
-
-    with patch("vocab_zero.interfaces.api.dtw_distance") as mock_dtw:
-
-        call_count = [0]
-
-
-
-        def side_effect(a, b):
-
-            call_count[0] += 1
-
-            a_val = a[0][0]
-
-            b_val = b[0][0]
-
-            return abs(a_val - b_val) * 5.0
-
-
-
-        mock_dtw.side_effect = side_effect
-
-
-
-        response = client.post("/api/calibrate/compute")
-
-        data = response.json()
-
-        assert data["ok"] is True
-
-        assert "intra_class" in data["data"]
-
-        assert "inter_class" in data["data"]
-
-        assert "suggested_threshold" in data["data"]
-
-        assert "separation_ratio" in data["data"]
-
-
-
-
-
-def test_calibrate_apply(client):
-
-    engine = client.app.state.engine
-
-
-
-    response = client.post("/api/calibrate/apply", json={
-
-        "dtw_threshold_36": 2.5,
-
-        "persist": False,
-
-    })
-
-    data = response.json()
-
-    assert data["ok"] is True
-
-    assert data["data"]["dtw_threshold_36"] == 2.5
-
-    assert engine.audio_config.dtw_threshold_36 == 2.5
-
-
-
-
-
-def test_calibrate_apply_invalid_value(client):
-
-    response = client.post("/api/calibrate/apply", json={
-
-        "dtw_threshold_36": -1.0,
-
-    })
-
-    data = response.json()
-
-    assert data["ok"] is False
-
-    assert data["error"]["code"] == "invalid_value"
-
-
-
-
-
-def test_calibrate_apply_no_changes(client):
-
-    response = client.post("/api/calibrate/apply", json={
-
-        "persist": False,
-
-    })
-
-    data = response.json()
-
-    assert data["ok"] is False
-
-    assert data["error"]["code"] == "no_changes"
 
 
 
@@ -1339,7 +1057,7 @@ def test_acoustic_match_accepted_regardless_of_confidence(client):
 
         confidence=1.0,
 
-        mfcc_templates=[[[0.1] * 12 for _ in range(5)]],
+        embeddings=[[0.1] * 384],
 
     )
 

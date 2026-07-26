@@ -41,21 +41,37 @@ class VectorStoreClient:
             embedding_function=self._embedding_function,
         )
 
+    def _entry_metadata(self, entry: LexiconEntry, embedding_idx: str) -> dict[str, str]:
+        return {
+            "source_term": entry.source_term,
+            "target_term": entry.target_term,
+            "confidence": str(entry.confidence),
+            "context_examples_json": json.dumps(entry.context_examples, ensure_ascii=False),
+            "embedding_idx": embedding_idx,
+        }
+
     def add_entry(self, entry: LexiconEntry) -> bool:
         try:
             document_text = self._build_document_text(entry)
-            metadata = {
-                "source_term": entry.source_term,
-                "target_term": entry.target_term,
-                "confidence": str(entry.confidence),
-                "context_examples_json": json.dumps(entry.context_examples, ensure_ascii=False),
-            }
-            
-            self._collection.upsert(
-                ids=[entry.source_term],
-                documents=[document_text],
-                metadatas=[metadata],
-            )
+
+            # Replace any existing rows for this source_term to avoid stale duplicates.
+            self.delete(entry.source_term)
+
+            valid_embeddings = [vec for vec in entry.embeddings if vec]
+            if valid_embeddings:
+                for idx, vector in enumerate(valid_embeddings):
+                    self._collection.upsert(
+                        ids=[f"{entry.source_term}_t{idx}"],
+                        embeddings=[vector],
+                        documents=[document_text],
+                        metadatas=[self._entry_metadata(entry, str(idx))],
+                    )
+            else:
+                self._collection.upsert(
+                    ids=[entry.source_term],
+                    documents=[document_text],
+                    metadatas=[self._entry_metadata(entry, "none")],
+                )
             return True
         except (ValueError, TypeError, chromadb.errors.ChromaError):
             return False
@@ -76,6 +92,7 @@ class VectorStoreClient:
                 return []
             
             search_results: list[SearchResult] = []
+            seen_source_terms = set()
             for idx, _ in enumerate(results["ids"][0]):
                 metadata = results["metadatas"][0][idx]
                 distance = results["distances"][0][idx]
@@ -84,6 +101,48 @@ class VectorStoreClient:
                 entry = self._metadata_to_entry(metadata)
                 if entry is None:
                     continue
+                
+                # De-duplicate entries by source_term in standard text search results
+                if entry.source_term in seen_source_terms:
+                    continue
+                seen_source_terms.add(entry.source_term)
+                
+                search_results.append(SearchResult(entry=entry, score=score))
+            
+            return search_results
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError, chromadb.errors.ChromaError):
+            return []
+
+    def search_by_vector(self, query_vector: list[float], k: int = 5) -> list[SearchResult]:
+        if not query_vector:
+            return []
+        if not isinstance(k, int) or k <= 0:
+            return []
+        
+        try:
+            results = self._collection.query(
+                query_embeddings=[query_vector],
+                n_results=k,
+            )
+            
+            if not results or not results["ids"] or not results["ids"][0]:
+                return []
+            
+            search_results: list[SearchResult] = []
+            seen_source_terms = set()
+            for idx, _ in enumerate(results["ids"][0]):
+                metadata = results["metadatas"][0][idx]
+                distance = results["distances"][0][idx]
+                score = max(0.0, min(1.0, 1.0 - distance))
+                
+                entry = self._metadata_to_entry(metadata)
+                if entry is None:
+                    continue
+                
+                # De-duplicate templates of the same source_term in search results
+                if entry.source_term in seen_source_terms:
+                    continue
+                seen_source_terms.add(entry.source_term)
                 
                 search_results.append(SearchResult(entry=entry, score=score))
             
@@ -96,12 +155,19 @@ class VectorStoreClient:
             return False
         
         try:
-            existing = self._collection.get(ids=[source_term])
-            if not existing or not existing["ids"]:
-                return False
+            # Delete by querying metadatas
+            existing = self._collection.get(where={"source_term": source_term})
+            if existing and existing["ids"]:
+                self._collection.delete(ids=existing["ids"])
+                return True
             
-            self._collection.delete(ids=[source_term])
-            return True
+            # Also try deleting direct id
+            existing_direct = self._collection.get(ids=[source_term])
+            if existing_direct and existing_direct["ids"]:
+                self._collection.delete(ids=[source_term])
+                return True
+                
+            return False
         except (ValueError, TypeError, chromadb.errors.ChromaError):
             return False
 
@@ -141,5 +207,5 @@ class VectorStoreClient:
                 confidence=confidence,
                 context_examples=context_examples,
             )
-        except Exception:
+        except (ValueError, TypeError, json.JSONDecodeError):
             return None

@@ -308,7 +308,7 @@ class TranslationEngine:
         candidates: list[tuple[LexiconEntry, float]],
         context: str | None = None,
     ) -> tuple[LexiconEntry | None, float]:
-        """Rerank candidates using acoustic DTW, N-Gram probability, and optionally LLM semantic ranking.
+        """Rerank candidates using acoustic cosine distance, N-Gram probability, and optionally LLM semantic ranking.
 
         Returns:
             Tuple of (selected_entry, confidence).
@@ -316,20 +316,22 @@ class TranslationEngine:
         if not candidates:
             return None, 0.0
 
-        # DTW distance threshold sourced from AudioConfig (dimension-aware)
-        dtw_threshold = self.audio_config.dtw_threshold
+        # Cosine-distance threshold for Whisper embedding matches.
+        distance_threshold = self.audio_config.match_distance_threshold
 
-        # Sort candidates by DTW distance (ascending)
-        candidates = sorted(candidates, key=lambda x: x[1])
+        # Only candidates below the distance threshold are eligible; drop the rest
+        # so reranking (n-gram/LLM) can never promote an out-of-threshold match.
+        candidates = sorted(
+            (item for item in candidates if item[1] < distance_threshold),
+            key=lambda x: x[1],
+        )
+        if not candidates:
+            return None, 0.0
 
         best_entry, best_dist = candidates[0]
 
-        # Check if the acoustic distance is below the threshold. If even the best is above, it's not a match.
-        if best_dist >= dtw_threshold:
-            return None, 0.0
-
         if len(candidates) == 1:
-            conf = float(max(0.0, min(1.0, 1.0 - (best_dist / dtw_threshold))))
+            conf = float(max(0.0, min(1.0, 1.0 - (best_dist / distance_threshold))))
             if conf < self.audio_config.min_confidence_gate:
                 return None, 0.0
             return best_entry, conf
@@ -337,9 +339,9 @@ class TranslationEngine:
         second_entry, second_dist = candidates[1]
 
 
-        # Phonetic ambiguity threshold (proportional to DTW threshold)
-        dtw_diff_threshold = dtw_threshold * self.audio_config.ambiguity_margin_ratio
-        ambiguous = (second_dist - best_dist) < dtw_diff_threshold
+        # Phonetic ambiguity threshold (proportional to the match distance threshold)
+        distance_diff_threshold = distance_threshold * self.audio_config.ambiguity_margin_ratio
+        ambiguous = (second_dist - best_dist) < distance_diff_threshold
 
         # 1. Apply N-gram language model
         last_word = None
@@ -382,7 +384,7 @@ class TranslationEngine:
 
         for entry, dist in candidates:
             # Acoustic score: 1.0 is perfect, 0.0 is at/above threshold
-            s_acoustic = max(0.0, 1.0 - (dist / dtw_threshold))
+            s_acoustic = max(0.0, 1.0 - (dist / distance_threshold))
 
             # N-gram score: transition probability (0.0 to 1.0)
             s_ngram = ngram_probs.get(entry.source_term, 0.0)
@@ -401,7 +403,7 @@ class TranslationEngine:
 
         # Calculate final confidence
         winner_dist = next(dist for entry, dist in candidates if entry.source_term == best_ranked_entry.source_term)
-        winner_acoustic_conf = float(max(0.0, min(1.0, 1.0 - (winner_dist / dtw_threshold))))
+        winner_acoustic_conf = float(max(0.0, min(1.0, 1.0 - (winner_dist / distance_threshold))))
 
         if llm_selected is not None and best_ranked_entry.source_term == llm_selected.source_term:
             final_conf = 0.7 * winner_acoustic_conf + 0.3 * llm_conf
@@ -410,11 +412,11 @@ class TranslationEngine:
                 (
                     dist
                     for entry, dist in candidates
-                    if entry.source_term != best_ranked_entry.source_term
+                    if entry.target_term.strip().lower() != best_ranked_entry.target_term.strip().lower()
                 ),
                 default=float("inf"),
             )
-            margin = max(0.0, (nearest_other_dist - winner_dist) / dtw_threshold)
+            margin = max(0.0, (nearest_other_dist - winner_dist) / distance_threshold)
             blend = self.audio_config.ambiguity_confidence_floor + (
                 1.0 - self.audio_config.ambiguity_confidence_floor
             ) * min(1.0, margin / self.audio_config.ambiguity_margin_ratio)

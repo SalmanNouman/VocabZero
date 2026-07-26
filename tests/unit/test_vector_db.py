@@ -307,6 +307,45 @@ def test_entry_with_empty_context(tmp_path, test_embedding_function):
     assert results[0].entry.context_examples == []
 
 
+def test_search_by_vector_retrieves_stored_embedding(tmp_path, test_embedding_function):
+    client = VectorStoreClient(
+        persist_dir=tmp_path,
+        embedding_function=test_embedding_function,
+    )
+
+    near = [1.0] + [0.0] * 383
+    far = [0.0] * 383 + [1.0]
+    client.add_entry(
+        LexiconEntry(source_term="near", target_term="cerca", embeddings=[near])
+    )
+    client.add_entry(
+        LexiconEntry(source_term="far", target_term="lejos", embeddings=[far])
+    )
+
+    results = client.search_by_vector(near, k=2)
+    assert len(results) == 2
+    # The nearest stored embedding must rank first.
+    assert results[0].entry.source_term == "near"
+
+
+def test_add_entry_dedupes_templates_by_source_term(tmp_path, test_embedding_function):
+    client = VectorStoreClient(
+        persist_dir=tmp_path,
+        embedding_function=test_embedding_function,
+    )
+
+    v1 = [1.0] + [0.0] * 383
+    v2 = [0.9, 0.1] + [0.0] * 382
+    client.add_entry(
+        LexiconEntry(source_term="hi", target_term="hola", embeddings=[v1, v2])
+    )
+
+    results = client.search_by_vector(v1, k=5)
+    # Two templates stored, but a single source_term should surface once.
+    assert len(results) == 1
+    assert results[0].entry.source_term == "hi"
+
+
 def test_entry_with_unicode(tmp_path, test_embedding_function):
     client = VectorStoreClient(
         persist_dir=tmp_path,

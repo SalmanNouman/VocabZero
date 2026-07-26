@@ -23,7 +23,7 @@ from vocab_zero.core.dictionary import DictionaryManager, LexiconEntry
 from vocab_zero.core.engine import TranslationEngine
 from vocab_zero.core.engine_factory import build_engine
 from vocab_zero.core.models import AudioConfig, TranslationResult
-from vocab_zero.utils.audio import acoustic_hash, dtw_distance, extract_mfcc
+from vocab_zero.utils.audio import acoustic_hash, extract_whisper_embedding
 
 load_dotenv(find_dotenv())
 
@@ -31,8 +31,6 @@ STATIC_DIR = Path(__file__).parent / "static"
 INDEX_HTML = STATIC_DIR / "index.html"
 MAX_AUDIO_SIZE = 160000  # Maximum samples (~10 seconds at 16kHz)
 MAX_BODY_SIZE = MAX_AUDIO_SIZE * 8 + 4096  # ~1.3 MB: audio floats as JSON text + overhead
-MAX_SAMPLES_PER_LABEL = 20
-MAX_TOTAL_CALIBRATION_SAMPLES = 200
 
 logger = logging.getLogger(__name__)
 
@@ -55,24 +53,22 @@ class AutocompleteRequest(BaseModel):
     context: str | None = None
 
 
-class CalibrationSample(BaseModel):
-    label: str
-    audio_data: list[float]
-
-
-class CalibrationApply(BaseModel):
-    dtw_threshold_36: float | None = None
-    dtw_threshold_12: float | None = None
-    min_confidence_gate: float | None = None
-    persist: bool = True
-
-
 def api_success(data: dict[str, object]) -> dict[str, object]:
     return {"ok": True, "data": data}
 
 
 def api_error(code: str, message: str) -> dict[str, object]:
     return {"ok": False, "error": {"code": code, "message": message}}
+
+
+def _cosine_distance(query: np.ndarray, query_norm: float, vector: list[float]) -> float | None:
+    """Cosine distance (0=identical, 1=orthogonal) or None if it can't be computed."""
+    candidate = np.array(vector, dtype=np.float64)
+    candidate_norm = np.linalg.norm(candidate)
+    if query_norm <= 0 or candidate_norm <= 0:
+        return None
+    similarity = float(np.dot(query, candidate) / (query_norm * candidate_norm))
+    return 1.0 - max(0.0, min(1.0, similarity))
 
 
 def perform_audio_matching_candidates(
@@ -82,53 +78,28 @@ def perform_audio_matching_candidates(
         logger.warning("Audio payload exceeds maximum size: %d samples", len(audio_data))
         return []
 
-    config = audio_config or AudioConfig()
-    query_mfcc = extract_mfcc(audio_data, audio_config=config)
-
-    if not query_mfcc:
+    query_vector = extract_whisper_embedding(audio_data)
+    if not query_vector:
         return []
 
-    expected_dims = len(query_mfcc[0])
+    # Primary path: cosine nearest-neighbour search over stored embeddings.
+    results = dictionary.vector_store.search_by_vector(query_vector, k=5)
+    if results:
+        return [(r.entry, 1.0 - r.score) for r in results]
 
-    candidates = []
+    # Fallback: in-memory cosine match when the vector store is empty but the
+    # dictionary holds embeddings (e.g. mocked entries in tests).
+    query = np.array(query_vector, dtype=np.float64)
+    query_norm = np.linalg.norm(query)
+    candidates: list[tuple[LexiconEntry, float]] = []
     for entry in dictionary.iter_entries():
-        template_distances = []
-        # Evaluate against all stored templates (k-NN style)
-        for template in entry.mfcc_templates:
-            if not template:
-                continue
+        distances = [
+            d for d in (_cosine_distance(query, query_norm, vec) for vec in entry.embeddings) if d is not None
+        ]
+        if distances:
+            candidates.append((entry, min(distances)))
 
-            length_ratio = max(len(query_mfcc), len(template)) / min(len(query_mfcc), len(template))
-            if length_ratio > config.max_length_ratio:
-                logger.debug(
-                    "Skipping template for '%s' due to length ratio %.2f > %.2f",
-                    entry.source_term,
-                    length_ratio,
-                    config.max_length_ratio,
-                )
-                continue
-
-            if any(len(frame) != expected_dims for frame in template):
-                logger.warning(
-                    "Skipping invalid template frame dimensions for '%s'", entry.source_term
-                )
-                continue
-
-            band_radius = max(
-                int(np.ceil(config.dtw_band_ratio * max(len(query_mfcc), len(template)))),
-                abs(len(query_mfcc) - len(template)),
-            )
-            distance = dtw_distance(query_mfcc, template, band_radius=band_radius)
-            if distance < float("inf"):
-                template_distances.append(distance)
-
-        if template_distances:
-            nearest_distances = sorted(template_distances)[: config.template_agg_k]
-            candidates.append((entry, sum(nearest_distances) / len(nearest_distances)))
-
-    # Sort candidates by distance
     candidates.sort(key=lambda x: x[1])
-
     return candidates
 
 
@@ -162,18 +133,18 @@ def process_feedback(
     engine: TranslationEngine,
 ) -> tuple[LexiconEntry, TranslationResult]:
 
-    mfcc_template = None
+    embedding: list[float] | None = None
     if audio_data is not None and len(audio_data) > 0:
         if len(audio_data) > MAX_AUDIO_SIZE:
             logger.warning(
                 "Audio payload exceeds maximum size in feedback: %d samples", len(audio_data)
             )
             raise ValueError(f"Audio payload exceeds maximum size of {MAX_AUDIO_SIZE} samples")
-        mfcc_template = extract_mfcc(audio_data, audio_config=engine.audio_config)
-        logger.debug(
-            "Generated MFCC template for feedback (shape %dxD)",
-            len(mfcc_template),
-        )
+
+        embedding = extract_whisper_embedding(audio_data)
+        if not embedding:
+            raise ValueError("Failed to extract a speech embedding from the provided audio")
+        logger.debug("Generated Whisper embedding for feedback (dim %d)", len(embedding))
 
     stripped_source = source_term.strip()
 
@@ -185,10 +156,10 @@ def process_feedback(
     existing_entry = engine.dictionary.lookup(stripped_source)
 
     if existing_entry is not None:
-        mfcc_templates = list(existing_entry.mfcc_templates)
+        embeddings = list(existing_entry.embeddings)
 
-        if mfcc_template is not None:
-            mfcc_templates.append(mfcc_template)
+        if embedding is not None:
+            embeddings.append(embedding)
 
         context_examples = list(existing_entry.context_examples)
 
@@ -200,21 +171,21 @@ def process_feedback(
             target_term=stripped_target,
             confidence=1.0,
             context_examples=context_examples,
-            mfcc_templates=mfcc_templates,
+            embeddings=embeddings,
         )
 
     else:
         effective_source = stripped_source
 
-        if mfcc_template is not None:
-            effective_source = acoustic_hash(mfcc_template)
+        if embedding is not None:
+            effective_source = acoustic_hash([embedding])
 
         entry = LexiconEntry(
             source_term=effective_source,
             target_term=stripped_target,
             confidence=1.0,
             context_examples=[context] if context else [],
-            mfcc_templates=[mfcc_template] if mfcc_template is not None else [],
+            embeddings=[embedding] if embedding is not None else [],
         )
 
     result = engine.persist_learned_entry(entry)
@@ -251,8 +222,6 @@ async def lifespan(app: FastAPI):
     vector_db_path = os.getenv("VOCABZERO_VECTOR_DB", None)
 
     app.state.engine = build_engine(dictionary_path=dictionary_path, vector_db_path=vector_db_path)
-
-    app.state.calibration_samples: dict[str, list[list[list[float]]]] = {}
 
     app.state.pruning_task = asyncio.create_task(
         periodic_pruning_task(app.state.engine.dictionary, 300.0)
@@ -305,29 +274,30 @@ async def translate(request: Request, payload: TranslateRequest):
         elif len(payload.audio_data) > MAX_AUDIO_SIZE:
             return api_error("audio_too_large", f"Audio exceeds {MAX_AUDIO_SIZE} samples")
         else:
-            loop = asyncio.get_running_loop()
-            candidates = await loop.run_in_executor(
-                None,
-                perform_audio_matching_candidates,
-                payload.audio_data,
-                engine.dictionary,
-                engine.audio_config,
-            )
-
-            logger.info(
-                "Audio translate query. Found %d candidates.",
-                len(candidates),
-            )
+            # Whisper inference runs synchronously in the main thread: it is
+            # fast (~30ms) and PyTorch's forward pass is unstable when dispatched
+            # to FastAPI's background thread pool.
+            try:
+                candidates = perform_audio_matching_candidates(
+                    payload.audio_data,
+                    engine.dictionary,
+                    engine.audio_config,
+                )
+            except Exception:
+                logger.exception("Whisper embedding/matching failed for audio translate")
+                return api_error(
+                    "extraction_failed", "Failed to process audio for matching"
+                )
 
             best_match, conf = engine.rerank_acoustic_candidates(candidates, payload.context)
-
+            logger.info(
+                "Audio translate query. Found %d candidates; best match: %s (conf %.4f)",
+                len(candidates),
+                best_match.target_term if best_match else None,
+                conf,
+            )
             for _entry, dist in candidates[:5]:
-                logger.info(
-                    "  Candidate (DTW dist: %.4f, threshold: %.4f, ratio: %.1f%%)",
-                    dist,
-                    engine.audio_config.dtw_threshold,
-                    dist / engine.audio_config.dtw_threshold * 100,
-                )
+                logger.info("  Candidate: %s (distance %.4f)", _entry.target_term, dist)
 
             if best_match is not None:
                 response_data = {
@@ -344,10 +314,17 @@ async def translate(request: Request, payload: TranslateRequest):
             else:
                 source_id = payload.source_term or f"unknown_{uuid.uuid4().hex}"
 
-                reason_msg = "No matching acoustic template below threshold"
+                reason_msg = "No matching embedding below threshold"
 
                 if candidates:
-                    reason_msg = f"DTW distance too high ({candidates[0][1]:.4f})"
+                    nearest_dist = min(dist for _, dist in candidates)
+                    if nearest_dist >= engine.audio_config.match_distance_threshold:
+                        reason_msg = f"Match distance too high ({nearest_dist:.4f})"
+                    else:
+                        reason_msg = (
+                            "Below distance threshold but failed the confidence/ambiguity "
+                            f"gate (nearest distance {nearest_dist:.4f})"
+                        )
 
                 response_data = {
                     "translated_text": "",
@@ -402,10 +379,20 @@ async def feedback(request: Request, payload: FeedbackRequestData):
         )
 
     except ValueError as e:
-        if "audio" in str(e).lower():
-            return api_error("audio_too_large", str(e))
+        message = str(e)
+        if "exceeds maximum size" in message:
+            return api_error("audio_too_large", message)
+        if "Failed to extract" in message:
+            return api_error("extraction_failed", message)
 
-        return api_error("invalid_input", str(e))
+        return api_error("invalid_input", message)
+
+    except Exception:
+        logger.exception("Failed to extract a speech embedding from feedback audio")
+        return api_error(
+            "extraction_failed",
+            "Failed to extract a speech embedding from the provided audio",
+        )
 
     if result.status == "error":
         return api_error(
@@ -499,246 +486,13 @@ async def get_audio_config(request: Request):
 
     return api_success(
         {
-            "dtw_threshold_36": cfg.dtw_threshold_36,
-            "dtw_threshold_12": cfg.dtw_threshold_12,
-            "dtw_threshold": cfg.dtw_threshold,
+            "match_distance_threshold": cfg.match_distance_threshold,
             "min_confidence_gate": cfg.min_confidence_gate,
             "ambiguity_margin_ratio": cfg.ambiguity_margin_ratio,
             "ambiguity_confidence_floor": cfg.ambiguity_confidence_floor,
-            "dtw_band_ratio": cfg.dtw_band_ratio,
-            "max_length_ratio": cfg.max_length_ratio,
-            "template_agg_k": cfg.template_agg_k,
-            "use_deltas": cfg.use_deltas,
-            "use_cmvn": cfg.use_cmvn,
-            "use_vtln": cfg.use_vtln,
-            "use_liftering": cfg.use_liftering,
             "sample_rate": cfg.sample_rate,
         }
     )
-
-
-@app.post("/api/calibrate/sample")
-async def calibrate_sample(request: Request, payload: CalibrationSample):
-
-    engine = request.app.state.engine
-
-    label = payload.label.strip()
-
-    if not label:
-        return api_error("invalid_input", "Label must be non-empty")
-
-    if len(payload.audio_data) > MAX_AUDIO_SIZE:
-        return api_error("audio_too_large", f"Audio exceeds {MAX_AUDIO_SIZE} samples")
-
-    if len(payload.audio_data) < 2400:
-        return api_error("audio_too_short", "Audio too short for MFCC extraction")
-
-    mfcc = extract_mfcc(payload.audio_data, audio_config=engine.audio_config)
-
-    if not mfcc:
-        return api_error("extraction_failed", "Could not extract MFCC features from audio")
-
-    samples = request.app.state.calibration_samples
-
-    if label not in samples:
-        samples[label] = []
-
-    if len(samples[label]) >= MAX_SAMPLES_PER_LABEL:
-        return api_error(
-            "too_many_samples", f"Label '{label}' already has {MAX_SAMPLES_PER_LABEL} samples"
-        )
-
-    total = sum(len(v) for v in samples.values())
-
-    if total >= MAX_TOTAL_CALIBRATION_SAMPLES:
-        return api_error(
-            "too_many_samples",
-            f"Total calibration samples cap ({MAX_TOTAL_CALIBRATION_SAMPLES}) reached",
-        )
-
-    samples[label].append(mfcc)
-
-    total = sum(len(v) for v in samples.values())
-
-    logger.info("Calibration sample added: label='%s' (%d total samples)", label, total)
-
-    return api_success(
-        {
-            "label": label,
-            "sample_count": len(samples[label]),
-            "total_samples": total,
-            "labels": {k: len(v) for k, v in samples.items()},
-        }
-    )
-
-
-@app.post("/api/calibrate/compute")
-async def calibrate_compute(request: Request):
-
-    engine = request.app.state.engine
-
-    samples = request.app.state.calibration_samples
-
-    if len(samples) < 2:
-        return api_error("insufficient_data", "Need at least 2 different labels to calibrate")
-
-    for label, templates in samples.items():
-        if len(templates) < 2:
-            return api_error(
-                "insufficient_data",
-                f"Label '{label}' needs at least 2 recordings (has {len(templates)})",
-            )
-
-    loop = asyncio.get_running_loop()
-
-    samples_snapshot: dict[str, list[list[list[float]]]] = {
-        label: [list(template) for template in templates] for label, templates in samples.items()
-    }
-
-    def _compute_distances() -> dict[str, object]:
-
-        intra_distances: list[float] = []
-
-        inter_distances: list[float] = []
-
-        labels = list(samples_snapshot.keys())
-
-        for i, label_a in enumerate(labels):
-            templates_a = samples_snapshot[label_a]
-
-            for j in range(len(templates_a)):
-                for k in range(j + 1, len(templates_a)):
-                    dist = dtw_distance(templates_a[j], templates_a[k])
-
-                    intra_distances.append(dist)
-
-            for label_b in labels[i + 1 :]:
-                templates_b = samples_snapshot[label_b]
-
-                for ta in templates_a:
-                    for tb in templates_b:
-                        dist = dtw_distance(ta, tb)
-
-                        inter_distances.append(dist)
-
-        if not intra_distances or not inter_distances:
-            return {"error": "Not enough pairwise distances to compute"}
-
-        max_intra = max(intra_distances)
-
-        min_inter = min(inter_distances)
-
-        mean_intra = sum(intra_distances) / len(intra_distances)
-
-        mean_inter = sum(inter_distances) / len(inter_distances)
-
-        # Suggested threshold: midpoint between max intra and min inter, biased toward safety
-
-        if min_inter > max_intra:
-            suggested = max_intra + (min_inter - max_intra) * 0.4
-
-        else:
-            suggested = (max_intra + min_inter) / 2.0
-
-        separation = min_inter / max_intra if max_intra > 0 else float("inf")
-
-        return {
-            "intra_class": {
-                "min": round(min(intra_distances), 4),
-                "max": round(max_intra, 4),
-                "mean": round(mean_intra, 4),
-                "count": len(intra_distances),
-            },
-            "inter_class": {
-                "min": round(min_inter, 4),
-                "max": round(max(inter_distances), 4),
-                "mean": round(mean_inter, 4),
-                "count": len(inter_distances),
-            },
-            "suggested_threshold_36": round(suggested, 4)
-            if engine.audio_config.use_deltas
-            else None,
-            "suggested_threshold_12": round(suggested, 4)
-            if not engine.audio_config.use_deltas
-            else None,
-            "suggested_threshold": round(suggested, 4),
-            "separation_ratio": round(separation, 4),
-            "well_separated": separation > 1.5,
-            "sample_counts": {k: len(v) for k, v in samples_snapshot.items()},
-        }
-
-    result = await loop.run_in_executor(None, _compute_distances)
-
-    if "error" in result:
-        return api_error("computation_failed", result["error"])
-
-    return api_success(result)
-
-
-@app.post("/api/calibrate/apply")
-async def calibrate_apply(request: Request, payload: CalibrationApply):
-
-    engine = request.app.state.engine
-
-    updates: dict[str, float] = {}
-
-    if payload.dtw_threshold_36 is not None:
-        if payload.dtw_threshold_36 <= 0:
-            return api_error("invalid_value", "dtw_threshold_36 must be positive")
-
-        updates["dtw_threshold_36"] = payload.dtw_threshold_36
-
-    if payload.dtw_threshold_12 is not None:
-        if payload.dtw_threshold_12 <= 0:
-            return api_error("invalid_value", "dtw_threshold_12 must be positive")
-
-        updates["dtw_threshold_12"] = payload.dtw_threshold_12
-
-    if payload.min_confidence_gate is not None:
-        if not (0.0 <= payload.min_confidence_gate <= 1.0):
-            return api_error("invalid_value", "min_confidence_gate must be between 0.0 and 1.0")
-
-        updates["min_confidence_gate"] = payload.min_confidence_gate
-
-    if not updates:
-        return api_error("no_changes", "No threshold values provided")
-
-    engine.audio_config = engine.audio_config.model_copy(update=updates)
-
-    logger.info("Applied calibration: %s", updates)
-
-    if payload.persist:
-        dictionary_path = os.getenv("VOCABZERO_DICTIONARY", "lexicon.json")
-
-        calibration_path = Path(dictionary_path).parent / "calibration.json"
-
-        try:
-            engine.audio_config.save_calibration(calibration_path)
-
-            logger.info("Calibration persisted to %s", calibration_path)
-
-        except (OSError, IOError) as exc:
-            logger.error("Failed to persist calibration: %s", exc)
-
-            return api_error("persistence_failed", f"Applied in-memory but failed to save: {exc}")
-
-    return api_success(
-        {
-            "dtw_threshold_36": engine.audio_config.dtw_threshold_36,
-            "dtw_threshold_12": engine.audio_config.dtw_threshold_12,
-            "dtw_threshold": engine.audio_config.dtw_threshold,
-            "min_confidence_gate": engine.audio_config.min_confidence_gate,
-            "persisted": payload.persist,
-        }
-    )
-
-
-@app.delete("/api/calibrate/samples")
-async def calibrate_clear(request: Request):
-
-    request.app.state.calibration_samples = {}
-
-    return api_success({"cleared": True})
 
 
 def main() -> None:

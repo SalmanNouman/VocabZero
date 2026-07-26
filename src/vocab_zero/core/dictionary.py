@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from threading import RLock
 from typing import Iterator, Protocol, TypeAlias
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from vocab_zero.utils.audio import k_medoids
 
@@ -18,7 +19,22 @@ class LexiconEntry(BaseModel):
     target_term: str
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     context_examples: list[str] = Field(default_factory=list)
-    mfcc_templates: list[list[list[float]]] = Field(default_factory=list)
+    # One Whisper-tiny encoder embedding (384 floats) per taught recording.
+    embeddings: list[list[float]] = Field(default_factory=list)
+
+    @field_validator("embeddings")
+    @classmethod
+    def _validate_embeddings(cls, value: list[list[float]]) -> list[list[float]]:
+        dims: set[int] = set()
+        for vector in value:
+            if not vector:
+                raise ValueError("embedding vectors must be non-empty")
+            if any(not math.isfinite(component) for component in vector):
+                raise ValueError("embedding vectors must contain only finite values")
+            dims.add(len(vector))
+        if len(dims) > 1:
+            raise ValueError("all embedding vectors must share the same dimensionality")
+        return value
 
 
 class NGramModel:
@@ -81,6 +97,11 @@ class DictionaryManager:
         self.path = Path(path)
         self.serializer = serializer or JsonSerializer()
         self._entries: dict[str, LexiconEntry] = {}
+        
+        # Initialize VectorStoreClient pointing to a persistent directory in the same path
+        from vocab_zero.core.vector_db import VectorStoreClient
+        persist_dir = self.path.parent / ".chroma"
+        self.vector_store = VectorStoreClient(persist_dir=persist_dir)
         self.ngram_model = NGramModel()
         self._lock = RLock()
         self.load()
@@ -90,19 +111,14 @@ class DictionaryManager:
             return self._entries.get(source_term)
 
     def lookup_by_hash(self, acoustic_hash: str) -> LexiconEntry | None:
-        """Lookup a lexicon entry by its acoustic-hash source_term (e.g. ``sound_8f2a1c``).
-
-        Semantically identical to ``lookup``; named to make intent clear when
-        the source_term is an auto-generated acoustic hash rather than text.
-        """
-        with self._lock:
-            return self._entries.get(acoustic_hash)
+        return self.lookup(acoustic_hash)
 
     def insert(self, entry: LexiconEntry) -> bool:
         with self._lock:
             if entry.source_term in self._entries:
                 return False
             self._entries[entry.source_term] = entry
+            self.vector_store.add_entry(entry)
             for example in entry.context_examples:
                 self.ngram_model.train_on_sentence(example)
             return True
@@ -110,6 +126,7 @@ class DictionaryManager:
     def upsert(self, entry: LexiconEntry) -> LexiconEntry:
         with self._lock:
             self._entries[entry.source_term] = entry
+            self.vector_store.add_entry(entry)
             self.ngram_model = NGramModel()
             for stored in self._entries.values():
                 for example in stored.context_examples:
@@ -118,12 +135,13 @@ class DictionaryManager:
 
     def update_confidence(self, source_term: str, delta: float) -> LexiconEntry | None:
         with self._lock:
-            entry = self._entries.get(source_term)
+            entry = self.lookup(source_term)
             if entry is None:
                 return None
             confidence = min(1.0, max(0.0, entry.confidence + delta))
             updated = entry.model_copy(update={"confidence": confidence})
             self._entries[source_term] = updated
+            self.vector_store.add_entry(updated)
             return updated
 
     def delete(self, source_term: str) -> bool:
@@ -131,6 +149,7 @@ class DictionaryManager:
             if source_term not in self._entries:
                 return False
             del self._entries[source_term]
+            self.vector_store.delete(source_term)
             return True
 
     def has(self, source_term: str) -> bool:
@@ -151,15 +170,22 @@ class DictionaryManager:
     def load(self) -> bool:
         with self._lock:
             if not self.path.exists():
+                # No lexicon to load: drop any stale rows left in the shared index.
+                self.vector_store.clear()
                 return False
 
             try:
                 loaded = self.serializer.loads(self.path.read_text(encoding="utf-8"))
                 entries = self._parse_entries(loaded)
             except (OSError, json.JSONDecodeError, ValidationError, TypeError, ValueError):
+                self.vector_store.clear()
                 return False
 
             self._entries = entries
+            self.vector_store.clear()
+            for entry in self._entries.values():
+                self.vector_store.add_entry(entry)
+
             self.ngram_model = NGramModel()
             for entry in self._entries.values():
                 for example in entry.context_examples:
@@ -168,11 +194,14 @@ class DictionaryManager:
 
     def prune_templates(self, max_templates: int = 5) -> None:
         with self._lock:
-            for entry in list(self._entries.values()):
-                if len(entry.mfcc_templates) > max_templates:
-                    pruned = k_medoids(entry.mfcc_templates, max_templates)
-                    entry.mfcc_templates = pruned
-            self.save()
+            changed = False
+            for entry in self._entries.values():
+                if len(entry.embeddings) > max_templates:
+                    entry.embeddings = k_medoids(entry.embeddings, max_templates)
+                    self.vector_store.add_entry(entry)
+                    changed = True
+            if changed:
+                self.save()
 
     def _dump_entries(self) -> JsonObject:
         return {
@@ -189,3 +218,5 @@ class DictionaryManager:
             entry = LexiconEntry.model_validate(entry_data)
             entries[entry.source_term] = entry
         return entries
+
+

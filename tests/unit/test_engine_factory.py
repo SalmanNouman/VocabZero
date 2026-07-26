@@ -84,20 +84,16 @@ def test_build_engine_with_gemma_provider(tmp_path, monkeypatch):
     assert isinstance(engine.llm_client, FakeGemmaClient)
 
 
-def test_build_engine_loads_calibration_override(tmp_path, monkeypatch):
-    """build_engine applies calibration.json thresholds when present alongside dictionary."""
-    import json
-
+def test_build_engine_reads_audio_config_from_env(tmp_path, monkeypatch):
+    """build_engine sources Whisper matching thresholds from the environment."""
     dict_path = tmp_path / "lexicon.json"
     dict_path.write_text("{}")
-    calibration_path = tmp_path / "calibration.json"
-    calibration_path.write_text(
-        json.dumps({"dtw_threshold_36": 123.4, "dtw_threshold_12": 56.7})
-    )
 
     monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("VOCABZERO_MATCH_DISTANCE_THRESHOLD", "0.42")
+    monkeypatch.setenv("VOCABZERO_MIN_CONFIDENCE", "0.7")
 
     engine = build_engine(dictionary_path=str(dict_path), vector_db_path=None)
 
-    assert engine.audio_config.dtw_threshold_36 == 123.4
-    assert engine.audio_config.dtw_threshold_12 == 56.7
+    assert engine.audio_config.match_distance_threshold == 0.42
+    assert engine.audio_config.min_confidence_gate == 0.7
